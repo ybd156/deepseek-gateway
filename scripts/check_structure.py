@@ -70,6 +70,7 @@ def main() -> int:
             check(False, f, str(exc))
 
     print("== 4. 上游配置结构 ==")
+    check(os.path.exists("app/providers.d/README.md"), "app/providers.d/README.md（新增上游的模板）")
     try:
         cfg = json.load(open("app/providers.json", encoding="utf-8"))
         provs = cfg.get("providers") or []
@@ -81,6 +82,19 @@ def main() -> int:
         check(len(names) == len(set(names)), "上游 name 不重复")
         check(all(not str(p["base_url"]).endswith("/") for p in provs),
               "base_url 不带结尾斜杠（避免拼出 //chat/completions）")
+
+        # 免费优先：默认配置里不允许出现「启用的付费上游」
+        no_flag = [p["name"] for p in provs if "free_only" not in p]
+        check(not no_flag, "每个上游都显式声明 free_only", str(no_flag))
+        paid_on = [p["name"] for p in provs
+                   if p.get("enabled") and not p.get("free_only")]
+        check(not paid_on, "默认没有启用付费上游（免费优先）", str(paid_on))
+        free_on = [p["name"] for p in provs
+                   if p.get("enabled") and p.get("free_only")]
+        check(bool(free_on), "至少启用一个免费上游", str(free_on))
+        bad_quota = [p["name"] for p in provs
+                     if p.get("free_only") and not isinstance(p.get("free_quota_tokens"), int)]
+        check(not bad_quota, "免费上游都声明了 free_quota_tokens", str(bad_quota))
     except Exception as exc:                           # noqa: BLE001
         check(False, "providers.json 解析", str(exc))
 
