@@ -83,6 +83,36 @@ def load_secrets() -> dict:
         return {}
 
 
+def save_secret(name: str, value: str) -> None:
+    """写/删一个密钥到 secrets.json（面板「填 Key」用）。"""
+    path = os.path.join(DATA_DIR, "secrets.json")
+    data = load_secrets()
+    if value:
+        data[name] = value
+    else:
+        data.pop(name, None)
+    os.makedirs(DATA_DIR, exist_ok=True)
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump(data, fh, ensure_ascii=False, indent=2)
+    try:
+        os.chmod(tmp, 0o600)
+    except Exception:
+        pass
+    os.replace(tmp, path)
+
+
+def key_source(key_env: str) -> str:
+    """这个上游的 key 是从哪来的：面板 / 环境变量 / 配置内联 / 没有。"""
+    if not key_env:
+        return "config"
+    if load_secrets().get(key_env):
+        return "面板"
+    if os.getenv(key_env):
+        return "向导"
+    return "无"
+
+
 def provider_files() -> list[str]:
     """主配置 + providers.d/ 下所有 *.json（便于单独新增上游，不必改主文件）。"""
     files = [CONFIG_PATH]
@@ -132,8 +162,9 @@ def load_config() -> None:
         items: list[dict] = []
         for it in raw_providers:
             key_env = it.get("api_key_env")
+            # 优先级：secrets.json（面板里填的） > 环境变量（向导/run.sh） > 配置内联
             if key_env:
-                key = os.getenv(key_env, "") or secrets.get(key_env, "")
+                key = secrets.get(key_env, "") or os.getenv(key_env, "")
             else:
                 key = it.get("api_key", "")
             name = it["name"]
@@ -145,6 +176,7 @@ def load_config() -> None:
                 "base_url": str(it["base_url"]).rstrip("/"),
                 "model": it["model"],
                 "api_key": (key or "").strip(),
+                "key_env": key_env or "",
                 "priority": int(it.get("priority", 100)),
                 "price_in": float(it.get("price_in", 0) or 0),
                 "price_out": float(it.get("price_out", 0) or 0),
@@ -495,6 +527,8 @@ class Handler(BaseHTTPRequestHandler):
             self.handle_toggle()
         elif path == "/admin/api/probe":
             self.handle_probe()
+        elif path == "/admin/api/set-key":
+            self.handle_set_key()
         else:
             self.send_json(404, {"error": "not found"})
 
@@ -542,20 +576,69 @@ class Handler(BaseHTTPRequestHandler):
                 "error": err_text(exc)[:300],
             })
 
+    def handle_set_key(self) -> None:
+        """面板里直接填/清某个上游的 Key（写进 data/secrets.json，优先于向导）。"""
+        if not authorized(self):
+            self.send_json(401, {"error": "unauthorized"})
+            return
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+            body = json.loads(self.rfile.read(length) or b"{}")
+            name = str(body["name"])
+            key = str(body.get("key", "")).strip()
+        except Exception:
+            self.send_json(400, {"ok": False, "error": "bad request"})
+            return
+
+        p = next((x for x in PROVIDERS if x["name"] == name), None)
+        if p is None:
+            self.send_json(404, {"ok": False, "error": "unknown provider"})
+            return
+        env = p["key_env"]
+        if not env:
+            self.send_json(400, {"ok": False,
+                                 "error": "该上游没有 api_key_env，请直接在 providers.json 里填 api_key"})
+            return
+
+        try:
+            save_secret(env, key)
+            load_config()
+        except Exception as exc:                    # noqa: BLE001
+            self.send_json(500, {"ok": False, "error": str(exc)})
+            return
+
+        now = next((x for x in PROVIDERS if x["name"] == name), None)
+        self.send_json(200, {"ok": True, "name": name,
+                             "has_key": bool(now and now["api_key"]),
+                             "source": key_source(env)})
+
     def status_payload(self) -> dict:
         now = time.time()
         usage = usage_summary()
         used = used_tokens()
+        sec = load_secrets()
         rows = []
         for p in PROVIDERS:
             with STATE_LOCK:
                 st = dict(STATE.get(p["name"], {}))
             u = usage.get(p["name"], {})
+            if p["type"] == "opencode":
+                source = "本地"
+            elif p["key_env"] and sec.get(p["key_env"]):
+                source = "面板"
+            elif p["key_env"] and os.getenv(p["key_env"]):
+                source = "向导"
+            elif p["api_key"]:
+                source = "配置"
+            else:
+                source = "无"
             rows.append({
                 "name": p["name"],
                 "enabled": p["enabled"],
                 "has_key": bool(p["api_key"]) or p["type"] == "opencode",
                 "type": p["type"],
+                "key_env": p["key_env"],
+                "key_source": source,
                 "priority": p["priority"],
                 "model": p["model"],
                 "quant": p["quant"],
@@ -837,6 +920,10 @@ ADMIN_HTML = """<!doctype html>
   button{background:#21262d;color:var(--fg);border:1px solid var(--line);
          border-radius:7px;padding:5px 10px;cursor:pointer;font-size:12px}
   button:hover{border-color:var(--acc)}
+  input.k{background:#0d1117;color:var(--fg);border:1px solid var(--line);
+          border-radius:7px;padding:4px 8px;font-size:12px;width:100%;max-width:180px}
+  input.k:focus{outline:none;border-color:var(--acc)}
+  .keycell{display:flex;gap:6px;align-items:center}
   .row{display:flex;gap:10px;align-items:center;margin:12px 0;flex-wrap:wrap}
   .err{color:var(--err);font-size:11px;max-width:260px;overflow:hidden;
        text-overflow:ellipsis;white-space:nowrap;display:inline-block}
@@ -853,6 +940,9 @@ ADMIN_HTML = """<!doctype html>
   </div>
 
   <div class="row">
+    <span class="sub" style="margin:0">口令</span>
+    <input id="tok" type="password" class="k" placeholder="GATEWAY_TOKEN（没设就留空）">
+    <button onclick="saveTok()">应用</button>
     <button onclick="load()">刷新</button>
     <button onclick="reloadCfg()">重载配置</button>
     <span class="sub" id="msg"></span>
@@ -862,7 +952,7 @@ ADMIN_HTML = """<!doctype html>
     <thead><tr>
       <th>上游</th><th>状态</th><th>模型</th><th>量化</th><th>免费额度</th>
       <th>输入 $/M</th><th>输出 $/M</th><th>24h 请求</th>
-      <th>24h tokens</th><th>24h 花费</th><th>操作</th><th>最近错误</th>
+      <th>24h tokens</th><th>24h 花费</th><th>密钥</th><th>操作</th><th>最近错误</th>
     </tr></thead>
     <tbody id="tbody"></tbody>
   </table>
@@ -874,7 +964,7 @@ const H = () => ({'Authorization':'Bearer '+tok(),'Content-Type':'application/js
 async function load(){
   try{
     const r = await fetch('/admin/api/status', {headers:H()});
-    if(r.status===401){ ask(); return; }
+    if(r.status===401){ msg('口令不对：请在上方「口令」里填入安装时设的值，点「应用」'); return; }
     const d = await r.json();
     document.getElementById('reqs').textContent = d.total_requests_24h;
     document.getElementById('cost').textContent = '$' + d.total_cost_24h.toFixed(4);
@@ -916,6 +1006,7 @@ async function load(){
         <td>${p.requests_24h}</td>
         <td>${t.toLocaleString()}</td>
         <td class="mono">$${p.cost_24h.toFixed(4)}</td>
+        <td><div class="keycell"><input id="k_${p.name}" type="password" class="k" placeholder="${p.key_source}"><button onclick="saveKey('${p.name}')">存</button></div></td>
         <td>${btns}</td>
         <td><span class="err" title="${(p.last_error||'').replace(/"/g,'&quot;')}">${p.last_error||'-'}</span></td>
       </tr>`;
@@ -923,9 +1014,31 @@ async function load(){
   }catch(e){ document.getElementById('msg').textContent = '加载失败：'+e; }
 }
 
-function ask(){
-  const v = prompt('请输入访问口令（安装时设置，留空则直接回车）：');
-  if(v !== null){ localStorage.setItem('gw_token', v.trim()); load(); }
+function msg(t){ document.getElementById('msg').textContent = t; }
+
+function saveTok(){
+  const v = (document.getElementById('tok').value || '').trim();
+  localStorage.setItem('gw_token', v);
+  msg(v ? '口令已保存到本浏览器' : '已清空口令');
+  load();
+}
+
+async function saveKey(name){
+  const el = document.getElementById('k_' + name);
+  const v = (el.value || '').trim();
+  try{
+    const r = await fetch('/admin/api/set-key', {method:'POST', headers:H(),
+      body: JSON.stringify({name, key: v})});
+    const d = await r.json();
+    if(d.ok){
+      el.value = '';
+      msg(v ? ('已保存 ' + name + '（来源：' + d.source + '）')
+            : ('已清空 ' + name + ' 的密钥'));
+    } else {
+      msg('保存失败：' + (d.error || '未知错误'));
+    }
+  }catch(e){ msg('保存请求失败：' + e); }
+  load();
 }
 
 async function reloadCfg(){
