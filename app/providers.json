@@ -1,0 +1,184 @@
+{
+  "settings": {
+    "strategy": "priority",
+    "request_timeout": 180,
+    "site_url": "http://fnos.local",
+    "site_name": "fnos-deepseek-gateway"
+  },
+  "providers": [
+    {
+      "name": "volc-ark",
+      "enabled": true,
+      "priority": 10,
+      "base_url": "https://ark.cn-beijing.volces.com/api/v3",
+      "api_key_env": "VOLC_ARK_API_KEY",
+      "model": "deepseek-v4.1-flash",
+      "price_in": 0.14,
+      "price_out": 0.56,
+      "quant": "fp8",
+      "note": "火山方舟；每模型 50 万 tokens 免费额度"
+    },
+    {
+      "name": "siliconflow",
+      "enabled": true,
+      "priority": 20,
+      "base_url": "https://api.siliconflow.cn/v1",
+      "api_key_env": "SILICONFLOW_API_KEY",
+      "model": "deepseek-ai/DeepSeek-V4-Flash",
+      "model_contains": "DeepSeek-V4",
+      "price_in": 0.3,
+      "price_out": 0.55,
+      "quant": "fp8",
+      "note": "硅基流动；Free 标签模型不扣券"
+    },
+    {
+      "name": "or-morph",
+      "enabled": true,
+      "priority": 30,
+      "base_url": "https://openrouter.ai/api/v1",
+      "api_key_env": "OPENROUTER_API_KEY",
+      "model": "deepseek/deepseek-v4.1-flash-1017",
+      "model_contains": "v4.1-flash",
+      "strict_model": true,
+      "extra": {
+        "provider": {
+          "only": [
+            "Morph"
+          ],
+          "allow_fallbacks": false
+        }
+      },
+      "price_in": 0.022,
+      "price_out": 0.4,
+      "quant": "fp8",
+      "note": "性价比最高：便宜且 fp8"
+    },
+    {
+      "name": "or-particle-flex",
+      "enabled": true,
+      "priority": 40,
+      "base_url": "https://openrouter.ai/api/v1",
+      "api_key_env": "OPENROUTER_API_KEY",
+      "model": "deepseek/deepseek-v4.1-flash-1017",
+      "model_contains": "v4.1-flash",
+      "strict_model": true,
+      "extra": {
+        "provider": {
+          "only": [
+            "Particle AI"
+          ],
+          "allow_fallbacks": false
+        }
+      },
+      "price_in": 0.025,
+      "price_out": 0.25,
+      "quant": "-",
+      "note": "输出最便宜之一；flex 档低优先级排队"
+    },
+    {
+      "name": "or-deepinfra-flex",
+      "enabled": true,
+      "priority": 50,
+      "base_url": "https://openrouter.ai/api/v1",
+      "api_key_env": "OPENROUTER_API_KEY",
+      "model": "deepseek/deepseek-v4.1-flash-1017",
+      "model_contains": "v4.1-flash",
+      "strict_model": true,
+      "extra": {
+        "provider": {
+          "only": [
+            "DeepInfra"
+          ],
+          "allow_fallbacks": false
+        }
+      },
+      "price_in": 0.0784,
+      "price_out": 0.2352,
+      "quant": "fp8",
+      "note": "51% 折扣价，fp8"
+    },
+    {
+      "name": "tencent-tokenhub",
+      "enabled": false,
+      "priority": 60,
+      "base_url": "https://tokenhub.tencentmaas.com/v1",
+      "api_key_env": "TENCENT_TOKENHUB_KEY",
+      "model": "DeepSeek-V4-Flash",
+      "model_contains": "DeepSeek",
+      "price_in": 0.15,
+      "price_out": 0.6,
+      "quant": "fp8",
+      "note": "新人 100 万 tokens/90 天；模型名以控制台为准"
+    },
+    {
+      "name": "baidu-qianfan",
+      "enabled": false,
+      "priority": 70,
+      "base_url": "https://qianfan.baidubce.com/v2",
+      "api_key_env": "BAIDU_QIANFAN_KEY",
+      "model": "deepseek-v4.1-flash",
+      "model_contains": "deepseek",
+      "price_in": 0.098,
+      "price_out": 0.394,
+      "quant": "fp8",
+      "note": "65% 折扣价；每模型 100 万 tokens/3 个月"
+    },
+    {
+      "name": "or-sail",
+      "enabled": true,
+      "priority": 75,
+      "base_url": "https://openrouter.ai/api/v1",
+      "api_key_env": "OPENROUTER_API_KEY",
+      "model": "deepseek/deepseek-v4.1-flash-1017",
+      "model_contains": "v4.1-flash",
+      "strict_model": true,
+      "extra": {
+        "provider": {
+          "only": [
+            "Sail Research"
+          ],
+          "allow_fallbacks": false
+        }
+      },
+      "price_in": 0.101,
+      "price_out": 0.15,
+      "quant": "fp4",
+      "note": "输出价全球最低，但 fp4 量化"
+    },
+    {
+      "name": "or-openinference",
+      "enabled": false,
+      "priority": 85,
+      "base_url": "https://openrouter.ai/api/v1",
+      "api_key_env": "OPENROUTER_API_KEY",
+      "model": "deepseek/deepseek-v4.1-flash-1017",
+      "model_contains": "v4.1-flash",
+      "strict_model": true,
+      "extra": {
+        "provider": {
+          "only": [
+            "OpenInference"
+          ],
+          "allow_fallbacks": false
+        }
+      },
+      "price_in": 0.006,
+      "price_out": 0.5,
+      "quant": "fp4",
+      "note": "输入比官方便宜 25 倍，但 fp4 质量下降"
+    },
+    {
+      "name": "deepseek-official",
+      "enabled": true,
+      "priority": 99,
+      "base_url": "https://api.deepseek.com",
+      "api_key_env": "DEEPSEEK_API_KEY",
+      "model": "deepseek-flash",
+      "model_contains": "deepseek",
+      "price_in": 0.15,
+      "price_out": 0.6,
+      "quant": "-",
+      "note": "官方；闲时半价、缓存命中 $0.003；1M 上下文"
+    }
+  ]
+}
