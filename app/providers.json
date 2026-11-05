@@ -24,6 +24,36 @@
       "note": "OpenCode 免费档：先在本机跑 opencode serve（见 README）；限时免费、无流式、200K 上下文"
     },
     {
+      "name": "nvidia-nim",
+      "enabled": false,
+      "priority": 15,
+      "base_url": "https://integrate.api.nvidia.com/v1",
+      "api_key_env": "NVIDIA_NIM_API_KEY",
+      "model": "deepseek-ai/deepseek-v4.1-flash",
+      "model_contains": "deepseek",
+      "free_only": true,
+      "free_quota_tokens": 0,
+      "price_in": 0,
+      "price_out": 0,
+      "quant": "fp8",
+      "note": "NVIDIA NIM 免费端点（build.nvidia.com 标 Free Endpoint）；需海外网络；额度说法不一，以控制台为准"
+    },
+    {
+      "name": "huawei-maas",
+      "enabled": false,
+      "priority": 16,
+      "base_url": "https://api.modelarts-maas.com/v1",
+      "api_key_env": "HUAWEI_MAAS_KEY",
+      "model": "DeepSeek-V4.1-Flash",
+      "model_contains": "DeepSeek",
+      "free_only": true,
+      "free_quota_tokens": 2000000,
+      "price_in": 0,
+      "price_out": 0,
+      "quant": "fp8",
+      "note": "华为云 ModelArts Studio：每模型 200 万 tokens 免费（国内额度最大）；模型名/base_url 以控制台「调用说明」为准"
+    },
+    {
       "name": "volc-ark",
       "enabled": true,
       "priority": 10,
