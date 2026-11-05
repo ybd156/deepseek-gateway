@@ -1,0 +1,16 @@
+appname=deepseek-gateway
+version=1.0.0
+display_name=DeepSeek 网关
+desc=把火山方舟、硅基流动、OpenRouter、腾讯 TokenHub、百度千帆、DeepSeek 官方等多个上游聚合成一个 OpenAI 兼容端点。<br>失败自动冷却切换 · 按价格排序 · token 用量与成本记账 · 网页面板。<br>纯 Python 标准库实现，不依赖 Docker 与任何第三方包。
+source=thirdparty
+platform=all
+maintainer=fnos-user
+maintainer_url=https://developer.fnnas.com/
+distributor=fnos-user
+os_min_version=1.0.0
+desktop_uidir=ui
+desktop_applaunchname=deepseek-gateway.main
+service_port=18787
+checkport=true
+ctl_stop=true
+changelog=首个版本：多上游聚合、自动故障切换、成本面板、网页配置。原生运行，无需容器。
