@@ -12,6 +12,7 @@
   8. providers.d/ 合并 + 免费额度硬卡（free_only/free_quota_tokens）
   9. type=opencode 上游（假 opencode serve：会话创建/发消息/删除、流式缓冲、probe）
  10. 面板填 Key（/admin/api/set-key → secrets.json 落盘、来源标记、清空）
+ 11. 面板设置（策略 / 冷却 / 口令：保存、生效、非法值拒绝、口令开关）
 """
 from __future__ import annotations
 
@@ -389,6 +390,37 @@ def main() -> int:
                             {"name": "keytest", "key": ""})
         d = json.loads(txt) if code == 200 else {}
         check(code == 200 and d.get("ok") and not d.get("has_key"), "清空密钥成功", txt[:120])
+
+        print("== 11. 面板设置（策略 / 冷却 / 口令）==")
+        code, _, txt = http("POST", base + "/admin/api/set-settings",
+                            {"strategy": "cheapest", "cooldown_seconds": 5})
+        d = json.loads(txt) if code == 200 else {}
+        check(code == 200 and d.get("ok") and d.get("strategy") == "cheapest",
+              "保存策略/冷却成功", txt[:120])
+        check(d.get("cooldown_seconds") == 5, "冷却已生效", str(d.get("cooldown_seconds")))
+
+        code, _, txt = http("GET", base + "/admin/api/status")
+        st = json.loads(txt)
+        check(st.get("strategy") == "cheapest" and st.get("cooldown_seconds") == 5,
+              "状态接口反映新设置", f"{st.get('strategy')}/{st.get('cooldown_seconds')}")
+
+        code, _, _ = http("POST", base + "/admin/api/set-settings", {"strategy": "bogus"})
+        check(code == 400, "非法策略被拒绝", str(code))
+
+        code, _, txt = http("POST", base + "/admin/api/set-settings",
+                            {"gateway_token": "sk-gw-test"})
+        check(code == 200 and json.loads(txt).get("auth_enabled") is True,
+              "口令已启用", txt[:120])
+        code, _, _ = http("GET", base + "/admin/api/status")
+        check(code == 401, "无口令访问被拒", str(code))
+        code, _, _ = http("GET", base + "/admin/api/status",
+                          headers={"Authorization": "Bearer sk-gw-test"})
+        check(code == 200, "带口令访问通过", str(code))
+
+        http("POST", base + "/admin/api/set-settings", {"gateway_token": ""},
+             headers={"Authorization": "Bearer sk-gw-test"})
+        code, _, _ = http("GET", base + "/admin/api/status")
+        check(code == 200, "清除口令后恢复免口令", str(code))
 
     finally:
         proc.terminate()
