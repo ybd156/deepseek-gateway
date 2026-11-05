@@ -27,6 +27,8 @@ export VOLC_ARK_API_KEY='${wizard_volc_key:-}'
 export SILICONFLOW_API_KEY='${wizard_siliconflow_key:-}'
 export TENCENT_TOKENHUB_KEY='${wizard_tencent_key:-}'
 export BAIDU_QIANFAN_KEY='${wizard_baidu_key:-}'
+export NVIDIA_NIM_API_KEY='${wizard_nvidia_key:-}'
+export HUAWEI_MAAS_KEY='${wizard_huawei_key:-}'
 export DEEPSEEK_API_KEY='${wizard_deepseek_key:-}'
 if [ -n '${wizard_http_proxy:-}' ]; then
     export HTTP_PROXY='${wizard_http_proxy}'
