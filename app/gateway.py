@@ -71,24 +71,69 @@ def write_overrides(data: dict) -> None:
     os.replace(tmp, OVERRIDES_PATH)
 
 
+def load_secrets() -> dict:
+    """额外的密钥文件（DATA_DIR/secrets.json），用于自己新增上游时不必改 run.sh。"""
+    path = os.path.join(DATA_DIR, "secrets.json")
+    try:
+        with open(path, encoding="utf-8") as fh:
+            return {str(k): str(v) for k, v in json.load(fh).items()}
+    except Exception:
+        return {}
+
+
+def provider_files() -> list[str]:
+    """主配置 + providers.d/ 下所有 *.json（便于单独新增上游，不必改主文件）。"""
+    files = [CONFIG_PATH]
+    extra = os.path.join(os.path.dirname(os.path.abspath(CONFIG_PATH)), "providers.d")
+    if os.path.isdir(extra):
+        files += [os.path.join(extra, n) for n in sorted(os.listdir(extra))
+                  if n.endswith(".json")]
+    return files
+
+
 def load_config() -> None:
-    """读取 providers.json + overrides.json（支持热重载）。"""
+    """读取 providers.json + providers.d/*.json + overrides.json（支持热重载）。"""
     global PROVIDERS, SETTINGS
     with CONFIG_LOCK:
-        with open(CONFIG_PATH, encoding="utf-8") as fh:
-            raw = json.load(fh)
-        SETTINGS = raw.get("settings") or {}
+        settings: dict = {}
+        raw_providers: list[dict] = []
+        index: dict[str, int] = {}
+
+        for path in provider_files():
+            try:
+                with open(path, encoding="utf-8") as fh:
+                    data = json.load(fh)
+            except Exception as exc:                    # noqa: BLE001
+                print(f"[gateway] 跳过无法解析的配置 {path}: {exc}", flush=True)
+                continue
+            if not settings and data.get("settings"):
+                settings = data["settings"]
+            for it in data.get("providers") or []:
+                name = it.get("name")
+                if not name:
+                    continue
+                if name in index:                       # 同名则后加载的覆盖
+                    raw_providers[index[name]] = it
+                else:
+                    index[name] = len(raw_providers)
+                    raw_providers.append(it)
+
+        SETTINGS = settings
         # 允许用环境变量覆盖排序策略（对应安装向导里的选择）
         env_strategy = (os.getenv("STRATEGY") or "").strip().lower()
         if env_strategy in ("priority", "cheapest"):
             SETTINGS["strategy"] = env_strategy
         overrides = read_overrides()
+        secrets = load_secrets()
         default_timeout = int(SETTINGS.get("request_timeout", 180))
 
         items: list[dict] = []
-        for it in raw.get("providers") or []:
+        for it in raw_providers:
             key_env = it.get("api_key_env")
-            key = os.getenv(key_env, "") if key_env else it.get("api_key", "")
+            if key_env:
+                key = os.getenv(key_env, "") or secrets.get(key_env, "")
+            else:
+                key = it.get("api_key", "")
             name = it["name"]
             enabled = bool(it.get("enabled", True))
             if name in overrides:
@@ -106,6 +151,8 @@ def load_config() -> None:
                 "timeout": int(it.get("timeout", default_timeout)),
                 "model_contains": str(it.get("model_contains", "") or ""),
                 "strict_model": bool(it.get("strict_model", False)),
+                "free_only": bool(it.get("free_only", False)),
+                "free_quota_tokens": int(it.get("free_quota_tokens", 0) or 0),
                 "extra": it.get("extra") or {},
                 "note": str(it.get("note", "")),
             })
@@ -142,6 +189,42 @@ def record(provider: str, model: str, tin: int, tout: int,
         conn.close()
     except Exception:                 # 记账失败不影响主链路
         pass
+    _QUOTA_CACHE["ts"] = 0.0          # 让额度统计立即刷新
+
+
+# ── 免费额度硬卡：累计 token 超配额就自动停用，绝不静默转付费 ──
+_QUOTA_CACHE: dict = {"ts": 0.0, "data": {}}
+QUOTA_TTL = 10.0
+
+
+def used_tokens() -> dict:
+    """各上游累计成功消耗的 token（全时段，用于比对免费额度）。"""
+    now = time.time()
+    if now - _QUOTA_CACHE["ts"] < QUOTA_TTL:
+        return _QUOTA_CACHE["data"]
+    try:
+        conn = sqlite3.connect(DB_PATH, timeout=5)
+        rows = conn.execute(
+            "SELECT provider, SUM(tokens_in + tokens_out) FROM usage "
+            "WHERE ok=1 GROUP BY provider"
+        ).fetchall()
+        conn.close()
+        data = {name: int(total or 0) for name, total in rows}
+    except Exception:
+        data = {}
+    _QUOTA_CACHE["ts"] = now
+    _QUOTA_CACHE["data"] = data
+    return data
+
+
+def is_exhausted(p: dict, used: dict) -> bool:
+    """free_only 且累计用量已达配额 → 视为额度用尽。"""
+    if not p["free_only"]:
+        return False
+    quota = p["free_quota_tokens"]
+    if quota <= 0:
+        return False
+    return used.get(p["name"], 0) >= quota
 
 
 def usage_summary() -> dict:
@@ -171,11 +254,13 @@ def usage_summary() -> dict:
 # ─────────────────────────── 路由 ───────────────────────────
 def candidates(strategy: str) -> list[dict]:
     now = time.time()
+    used = used_tokens()
     with STATE_LOCK:
         live = [
             p for p in PROVIDERS
             if p["enabled"] and p["api_key"]
             and STATE.get(p["name"], {}).get("cooldown_until", 0) <= now
+            and not is_exhausted(p, used)
         ]
     if strategy == "cheapest":
         live.sort(key=lambda p: (p["price_in"] + p["price_out"], p["priority"]))
@@ -345,6 +430,7 @@ class Handler(BaseHTTPRequestHandler):
     def status_payload(self) -> dict:
         now = time.time()
         usage = usage_summary()
+        used = used_tokens()
         rows = []
         for p in PROVIDERS:
             with STATE_LOCK:
@@ -369,6 +455,10 @@ class Handler(BaseHTTPRequestHandler):
                 "cost_24h": u.get("cost_24h", 0.0),
                 "errors_24h": u.get("errors_24h", 0),
                 "note": p["note"],
+                "free_only": p["free_only"],
+                "free_quota_tokens": p["free_quota_tokens"],
+                "used_tokens": used.get(p["name"], 0),
+                "exhausted": is_exhausted(p, used),
             })
         return {
             "strategy": SETTINGS.get("strategy", "priority"),
@@ -597,7 +687,7 @@ ADMIN_HTML = """<!doctype html>
 
   <table>
     <thead><tr>
-      <th>上游</th><th>状态</th><th>模型</th><th>量化</th>
+      <th>上游</th><th>状态</th><th>模型</th><th>量化</th><th>免费额度</th>
       <th>输入 $/M</th><th>输出 $/M</th><th>24h 请求</th>
       <th>24h tokens</th><th>24h 花费</th><th>操作</th><th>最近错误</th>
     </tr></thead>
@@ -616,16 +706,25 @@ async function load(){
     document.getElementById('reqs').textContent = d.total_requests_24h;
     document.getElementById('cost').textContent = '$' + d.total_cost_24h.toFixed(4);
     document.getElementById('live').textContent =
-      d.providers.filter(p=>p.enabled&&p.has_key&&p.cooldown===0).length
+      d.providers.filter(p=>p.enabled&&p.has_key&&p.cooldown===0&&!p.exhausted).length
       + ' / ' + d.providers.length;
     document.getElementById('strat').textContent = d.strategy;
     document.getElementById('tbody').innerHTML = d.providers.map(p=>{
       let st, cls;
       if(!p.enabled){ st='已停用'; cls='d'; }
       else if(!p.has_key){ st='缺密钥'; cls='d'; }
+      else if(p.exhausted){ st='额度用尽'; cls='r'; }
       else if(p.cooldown>0){ st='冷却 '+p.cooldown+'s'; cls='r'; }
       else if(p.fails>0){ st='重试中'; cls='y'; }
       else { st='正常'; cls='g'; }
+      let quota;
+      if(!p.free_only){ quota = '<span class="sub">付费</span>'; }
+      else if(p.free_quota_tokens>0){
+        const pct = Math.min(100, p.used_tokens / p.free_quota_tokens * 100);
+        const col = p.exhausted ? 'var(--err)' : (pct > 80 ? 'var(--warn)' : 'var(--ok)');
+        quota = `<span style="color:${col}">${p.used_tokens.toLocaleString()}</span>`
+              + `<span class="sub"> / ${p.free_quota_tokens.toLocaleString()}</span>`;
+      } else { quota = '<span class="sub">免费(不限)</span>'; }
       const t = p.tokens_in_24h + p.tokens_out_24h;
       const btn = p.enabled
         ? `<button onclick="tog('${p.name}',false)">停用</button>`
@@ -635,6 +734,7 @@ async function load(){
         <td><span class="tag ${cls}">${st}</span></td>
         <td class="mono">${p.model}</td>
         <td>${p.quant}</td>
+        <td>${quota}</td>
         <td class="mono">${p.price_in.toFixed(4)}</td>
         <td class="mono">${p.price_out.toFixed(4)}</td>
         <td>${p.requests_24h}</td>
