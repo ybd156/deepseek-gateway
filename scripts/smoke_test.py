@@ -365,6 +365,24 @@ def main() -> int:
         check(code == 200 and hdrs.get("X-Gateway-Provider") == "good",
               "停用 opencode 后正常回落", str(hdrs.get("X-Gateway-Provider")))
 
+        print("== 9b. opencode server 没起来时，报错要能看懂 ==")
+        with open(os.path.join(pd, "opencode-dead.json"), "w", encoding="utf-8") as fh:
+            json.dump({"providers": [{
+                "name": "opencode-dead", "type": "opencode", "enabled": True,
+                "priority": 0, "base_url": f"http://127.0.0.1:{DEAD_PORT}",
+                "model": "deepseek-v4.1-flash-free", "opencode_provider": "opencode",
+                "free_only": True, "free_quota_tokens": 0,
+                "price_in": 0, "price_out": 0, "quant": "-", "note": "故意连不上",
+            }]}, fh, ensure_ascii=False)
+        http("POST", base + "/admin/api/reload", {})
+        code, _, txt = http("POST", base + "/admin/api/probe", {"name": "opencode-dead"})
+        probe = json.loads(txt) if code == 200 else {}
+        err = str(probe.get("error") or "")
+        check(probe.get("ok") is False, "自检如实报告失败", err[:80])
+        check("没在运行" in err and "opencode serve" in err,
+              "报错里给了可操作提示", err[:100])
+        http("POST", base + "/admin/api/toggle", {"name": "opencode-dead", "enabled": False})
+
         print("== 10. 面板填 Key（/admin/api/set-key → secrets.json）==")
         code, _, txt = http("POST", base + "/admin/api/set-key",
                             {"name": "keytest", "key": "sk-test-abc"})
