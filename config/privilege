@@ -1,0 +1,7 @@
+{
+  "defaults": {
+    "run-as": "package"
+  },
+  "username": "deepseek-gateway",
+  "groupname": "deepseek-gateway"
+}
