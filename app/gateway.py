@@ -1,0 +1,704 @@
+#!/usr/bin/env python3
+"""DeepSeek-V4.1-Flash 聚合网关 · 纯标准库实现
+
+不依赖任何第三方包，也不需要 Docker：
+  只用 Python 3.8+ 自带的 http.server / urllib / sqlite3 / json
+
+一个 OpenAI 兼容端点，背后挂多家上游：
+  - 自动故障切换：429 / 5xx / 超时 → 冷却 → 换下一家
+  - 排序策略：priority（默认）或 cheapest（按价格）
+  - 响应 model 字段校验，防上游静默换模型
+  - token 用量与成本记账（SQLite）
+  - /admin 面板：上游健康、报价、24h 花费、一键启停
+
+环境变量：
+  CONFIG_PATH  上游配置 JSON 路径（默认 ./providers.json）
+  DATA_DIR     数据目录（默认 ./data）
+  PORT         监听端口（默认 18787）
+  HOST         监听地址（默认 0.0.0.0）
+  GATEWAY_TOKEN 访问口令，留空则不校验
+  COOLDOWN_SECONDS 失败冷却基数，默认 60
+  OPENROUTER_API_KEY / VOLC_ARK_API_KEY / ... 各上游密钥
+"""
+from __future__ import annotations
+
+import json
+import os
+import signal
+import sqlite3
+import threading
+import time
+import urllib.error
+import urllib.request
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import urlparse
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+CONFIG_PATH = os.getenv("CONFIG_PATH") or os.path.join(BASE_DIR, "providers.json")
+DATA_DIR = os.getenv("DATA_DIR") or os.path.join(BASE_DIR, "data")
+DB_PATH = os.path.join(DATA_DIR, "usage.db")
+OVERRIDES_PATH = os.path.join(DATA_DIR, "overrides.json")
+GATEWAY_TOKEN = os.getenv("GATEWAY_TOKEN", "").strip()
+DEFAULT_COOLDOWN = int(os.getenv("COOLDOWN_SECONDS", "60"))
+PORT = int(os.getenv("PORT", "18787"))
+HOST = os.getenv("HOST", "0.0.0.0")
+
+PROVIDERS: list[dict] = []
+SETTINGS: dict = {}
+STATE: dict[str, dict] = {}
+STATE_LOCK = threading.Lock()
+CONFIG_LOCK = threading.Lock()
+
+
+class ProviderError(Exception):
+    """上游失败（可切换到下一家）。"""
+
+
+# ─────────────────────────── 配置 ───────────────────────────
+def read_overrides() -> dict:
+    try:
+        with open(OVERRIDES_PATH, encoding="utf-8") as fh:
+            return {str(k): bool(v) for k, v in json.load(fh).items()}
+    except Exception:
+        return {}
+
+
+def write_overrides(data: dict) -> None:
+    os.makedirs(DATA_DIR, exist_ok=True)
+    tmp = OVERRIDES_PATH + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump(data, fh, ensure_ascii=False, indent=2)
+    os.replace(tmp, OVERRIDES_PATH)
+
+
+def load_config() -> None:
+    """读取 providers.json + overrides.json（支持热重载）。"""
+    global PROVIDERS, SETTINGS
+    with CONFIG_LOCK:
+        with open(CONFIG_PATH, encoding="utf-8") as fh:
+            raw = json.load(fh)
+        SETTINGS = raw.get("settings") or {}
+        # 允许用环境变量覆盖排序策略（对应安装向导里的选择）
+        env_strategy = (os.getenv("STRATEGY") or "").strip().lower()
+        if env_strategy in ("priority", "cheapest"):
+            SETTINGS["strategy"] = env_strategy
+        overrides = read_overrides()
+        default_timeout = int(SETTINGS.get("request_timeout", 180))
+
+        items: list[dict] = []
+        for it in raw.get("providers") or []:
+            key_env = it.get("api_key_env")
+            key = os.getenv(key_env, "") if key_env else it.get("api_key", "")
+            name = it["name"]
+            enabled = bool(it.get("enabled", True))
+            if name in overrides:
+                enabled = overrides[name]
+            items.append({
+                "name": name,
+                "base_url": str(it["base_url"]).rstrip("/"),
+                "model": it["model"],
+                "api_key": (key or "").strip(),
+                "priority": int(it.get("priority", 100)),
+                "price_in": float(it.get("price_in", 0) or 0),
+                "price_out": float(it.get("price_out", 0) or 0),
+                "quant": it.get("quant", "-"),
+                "enabled": enabled,
+                "timeout": int(it.get("timeout", default_timeout)),
+                "model_contains": str(it.get("model_contains", "") or ""),
+                "strict_model": bool(it.get("strict_model", False)),
+                "extra": it.get("extra") or {},
+                "note": str(it.get("note", "")),
+            })
+        PROVIDERS = items
+        with STATE_LOCK:
+            for p in PROVIDERS:
+                STATE.setdefault(p["name"], {})
+
+
+# ─────────────────────────── 记账 ───────────────────────────
+def init_db() -> None:
+    os.makedirs(DATA_DIR, exist_ok=True)
+    conn = sqlite3.connect(DB_PATH, timeout=5)
+    conn.execute(
+        """CREATE TABLE IF NOT EXISTS usage(
+               ts REAL, provider TEXT, model TEXT,
+               tokens_in INTEGER, tokens_out INTEGER,
+               cost REAL, ok INTEGER, ms INTEGER, err TEXT)"""
+    )
+    conn.commit()
+    conn.close()
+
+
+def record(provider: str, model: str, tin: int, tout: int,
+           cost: float, ok: bool, ms: int, err: str = "") -> None:
+    try:
+        conn = sqlite3.connect(DB_PATH, timeout=5)
+        conn.execute(
+            "INSERT INTO usage VALUES (?,?,?,?,?,?,?,?,?)",
+            (time.time(), provider, model, int(tin), int(tout),
+             float(cost), 1 if ok else 0, int(ms), (err or "")[:300]),
+        )
+        conn.commit()
+        conn.close()
+    except Exception:                 # 记账失败不影响主链路
+        pass
+
+
+def usage_summary() -> dict:
+    try:
+        conn = sqlite3.connect(DB_PATH, timeout=5)
+        rows = conn.execute(
+            """SELECT provider, COUNT(*), SUM(tokens_in), SUM(tokens_out),
+                      SUM(cost), SUM(CASE WHEN ok=0 THEN 1 ELSE 0 END)
+               FROM usage WHERE ts > ? GROUP BY provider""",
+            (time.time() - 86400,),
+        ).fetchall()
+        conn.close()
+    except Exception:
+        rows = []
+    out = {}
+    for name, reqs, tin, tout, cost, errs in rows:
+        out[name] = {
+            "requests_24h": reqs or 0,
+            "tokens_in_24h": tin or 0,
+            "tokens_out_24h": tout or 0,
+            "cost_24h": round(cost or 0.0, 6),
+            "errors_24h": errs or 0,
+        }
+    return out
+
+
+# ─────────────────────────── 路由 ───────────────────────────
+def candidates(strategy: str) -> list[dict]:
+    now = time.time()
+    with STATE_LOCK:
+        live = [
+            p for p in PROVIDERS
+            if p["enabled"] and p["api_key"]
+            and STATE.get(p["name"], {}).get("cooldown_until", 0) <= now
+        ]
+    if strategy == "cheapest":
+        live.sort(key=lambda p: (p["price_in"] + p["price_out"], p["priority"]))
+    else:
+        live.sort(key=lambda p: p["priority"])
+    return live
+
+
+def mark_fail(p: dict, err: Exception) -> None:
+    with STATE_LOCK:
+        st = STATE.setdefault(p["name"], {})
+        st["fails"] = st.get("fails", 0) + 1
+        st["cooldown_until"] = time.time() + DEFAULT_COOLDOWN * min(st["fails"], 6)
+        st["last_error"] = str(err)[:300]
+        st["last_error_at"] = time.time()
+
+
+def mark_ok(p: dict) -> None:
+    with STATE_LOCK:
+        st = STATE.setdefault(p["name"], {})
+        st["fails"] = 0
+        st["cooldown_until"] = 0
+        st["ok"] = st.get("ok", 0) + 1
+        st["last_ok_at"] = time.time()
+
+
+def build_body(p: dict, payload: dict, stream: bool) -> bytes:
+    body = dict(payload)
+    body["model"] = p["model"]
+    if p["extra"]:
+        body.update(p["extra"])
+    if stream:
+        body.setdefault("stream_options", {"include_usage": True})
+    return json.dumps(body, ensure_ascii=False).encode("utf-8")
+
+
+def headers_for(p: dict, stream: bool) -> dict:
+    h = {
+        "Content-Type": "application/json",
+        "Accept": "text/event-stream" if stream else "application/json",
+    }
+    if p["api_key"]:
+        h["Authorization"] = "Bearer " + p["api_key"]
+    if "openrouter.ai" in p["base_url"]:
+        h["HTTP-Referer"] = SETTINGS.get("site_url", "http://fnos.local")
+        h["X-Title"] = SETTINGS.get("site_name", "fnos-deepseek-gateway")
+    return h
+
+
+def open_upstream(p: dict, payload: dict, stream: bool):
+    req = urllib.request.Request(
+        p["base_url"] + "/chat/completions",
+        data=build_body(p, payload, stream),
+        headers=headers_for(p, stream),
+        method="POST",
+    )
+    return urllib.request.urlopen(req, timeout=p["timeout"])
+
+
+def err_text(exc: BaseException) -> str:
+    if isinstance(exc, urllib.error.HTTPError):
+        try:
+            body = exc.read().decode("utf-8", "ignore")
+        except Exception:
+            body = ""
+        return f"HTTP {exc.code}: {body[:300]}"
+    return f"{type(exc).__name__}: {exc}"
+
+
+def check_model(p: dict, data: dict) -> str:
+    got = str(data.get("model") or "")
+    want = p["model_contains"]
+    if want and want.lower() not in got.lower():
+        msg = f"model 校验失败：期望含 '{want}'，实际 '{got}'"
+        if p["strict_model"]:
+            raise ProviderError(msg)
+        return msg
+    return ""
+
+
+def cost_of(p: dict, tin: int, tout: int) -> float:
+    return tin / 1_000_000 * p["price_in"] + tout / 1_000_000 * p["price_out"]
+
+
+def authorized(handler: BaseHTTPRequestHandler) -> bool:
+    if not GATEWAY_TOKEN:
+        return True
+    auth = handler.headers.get("Authorization", "")
+    token = auth[7:].strip() if auth.lower().startswith("bearer ") else ""
+    return token == GATEWAY_TOKEN
+
+
+# ─────────────────────────── HTTP 处理 ───────────────────────────
+class Handler(BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
+    server_version = "DeepSeekGateway/1.0"
+
+    # ---- 输出工具 ----
+    def _send(self, code: int, body: bytes, ctype: str, extra: dict | None = None) -> None:
+        self.send_response(code)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(body)))
+        for k, v in (extra or {}).items():
+            self.send_header(k, v)
+        self.end_headers()
+        try:
+            self.wfile.write(body)
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+
+    def send_json(self, code: int, obj, extra: dict | None = None) -> None:
+        self._send(code, json.dumps(obj, ensure_ascii=False).encode("utf-8"),
+                   "application/json; charset=utf-8", extra)
+
+    def _chunk(self, data: bytes) -> None:
+        self.wfile.write(b"%x\r\n" % len(data) + data + b"\r\n")
+        self.wfile.flush()
+
+    def log_message(self, fmt, *args):        # 安静一点
+        pass
+
+    # ---- 路由 ----
+    def do_GET(self) -> None:
+        path = urlparse(self.path).path
+        if path == "/healthz":
+            self.send_json(200, {"ok": True, "providers": len(PROVIDERS)})
+        elif path in ("/", "/admin", "/admin/"):
+            self._send(200, ADMIN_HTML.encode("utf-8"), "text/html; charset=utf-8")
+        elif path == "/v1/models":
+            if not authorized(self):
+                self.send_json(401, {"error": "unauthorized"})
+                return
+            seen, data = set(), []
+            for p in PROVIDERS:
+                if p["model"] in seen:
+                    continue
+                seen.add(p["model"])
+                data.append({"id": p["model"], "object": "model", "owned_by": p["name"]})
+            self.send_json(200, {"object": "list", "data": data})
+        elif path == "/admin/api/status":
+            if not authorized(self):
+                self.send_json(401, {"error": "unauthorized"})
+                return
+            self.send_json(200, self.status_payload())
+        else:
+            self.send_json(404, {"error": "not found"})
+
+    def do_POST(self) -> None:
+        path = urlparse(self.path).path
+        if path == "/v1/chat/completions":
+            self.handle_chat()
+        elif path == "/admin/api/reload":
+            if not authorized(self):
+                self.send_json(401, {"error": "unauthorized"})
+                return
+            try:
+                load_config()
+                self.send_json(200, {"ok": True, "providers": len(PROVIDERS)})
+            except Exception as exc:               # noqa: BLE001
+                self.send_json(500, {"ok": False, "error": str(exc)})
+        elif path == "/admin/api/toggle":
+            self.handle_toggle()
+        else:
+            self.send_json(404, {"error": "not found"})
+
+    # ---- 管理接口 ----
+    def status_payload(self) -> dict:
+        now = time.time()
+        usage = usage_summary()
+        rows = []
+        for p in PROVIDERS:
+            with STATE_LOCK:
+                st = dict(STATE.get(p["name"], {}))
+            u = usage.get(p["name"], {})
+            rows.append({
+                "name": p["name"],
+                "enabled": p["enabled"],
+                "has_key": bool(p["api_key"]),
+                "priority": p["priority"],
+                "model": p["model"],
+                "quant": p["quant"],
+                "price_in": p["price_in"],
+                "price_out": p["price_out"],
+                "cooldown": max(0, int(st.get("cooldown_until", 0) - now)),
+                "fails": st.get("fails", 0),
+                "ok": st.get("ok", 0),
+                "last_error": st.get("last_error", ""),
+                "requests_24h": u.get("requests_24h", 0),
+                "tokens_in_24h": u.get("tokens_in_24h", 0),
+                "tokens_out_24h": u.get("tokens_out_24h", 0),
+                "cost_24h": u.get("cost_24h", 0.0),
+                "errors_24h": u.get("errors_24h", 0),
+                "note": p["note"],
+            })
+        return {
+            "strategy": SETTINGS.get("strategy", "priority"),
+            "total_cost_24h": round(sum(r["cost_24h"] for r in rows), 6),
+            "total_requests_24h": sum(r["requests_24h"] for r in rows),
+            "providers": rows,
+        }
+
+    def handle_toggle(self) -> None:
+        if not authorized(self):
+            self.send_json(401, {"error": "unauthorized"})
+            return
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+            body = json.loads(self.rfile.read(length) or b"{}")
+            name = str(body["name"])
+            enabled = bool(body["enabled"])
+        except Exception:
+            self.send_json(400, {"ok": False, "error": "bad request"})
+            return
+        if name not in {p["name"] for p in PROVIDERS}:
+            self.send_json(404, {"ok": False, "error": "unknown provider"})
+            return
+        ov = read_overrides()
+        ov[name] = enabled
+        write_overrides(ov)
+        load_config()
+        self.send_json(200, {"ok": True, "name": name, "enabled": enabled})
+
+    # ---- 主接口 ----
+    def handle_chat(self) -> None:
+        if not authorized(self):
+            self.send_json(401, {"error": {"message": "invalid gateway token",
+                                           "type": "unauthorized"}})
+            return
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+            payload = json.loads(self.rfile.read(length) or b"{}")
+        except Exception:
+            self.send_json(400, {"error": {"message": "invalid JSON body",
+                                           "type": "bad_request"}})
+            return
+
+        strategy = (self.headers.get("X-Route-Strategy")
+                    or SETTINGS.get("strategy") or "priority").lower()
+        if strategy not in ("priority", "cheapest"):
+            strategy = "priority"
+
+        if payload.get("stream"):
+            self.handle_stream(payload, strategy)
+        else:
+            self.handle_nonstream(payload, strategy)
+
+    def handle_nonstream(self, payload: dict, strategy: str) -> None:
+        tried, last = [], None
+        for p in candidates(strategy):
+            tried.append(p["name"])
+            t0 = time.time()
+            try:
+                resp = open_upstream(p, payload, False)
+                try:
+                    raw = resp.read()
+                finally:
+                    resp.close()
+                data = json.loads(raw.decode("utf-8", "ignore"))
+                warn = check_model(p, data)
+                u = data.get("usage") or {}
+                tin = int(u.get("prompt_tokens") or 0)
+                tout = int(u.get("completion_tokens") or 0)
+                record(p["name"], p["model"], tin, tout,
+                       cost_of(p, tin, tout), True,
+                       int((time.time() - t0) * 1000), warn)
+                mark_ok(p)
+                extra = {"X-Gateway-Provider": p["name"]}
+                if warn:
+                    extra["X-Gateway-Warning"] = warn
+                self.send_json(200, data, extra)
+                return
+            except Exception as exc:               # noqa: BLE001
+                msg = err_text(exc)
+                mark_fail(p, ProviderError(msg))
+                record(p["name"], p["model"], 0, 0, 0.0, False,
+                       int((time.time() - t0) * 1000), msg)
+                last = msg
+        self.send_json(502, {"error": {
+            "message": f"所有上游均失败：{last}（已尝试：{', '.join(tried) or '无可用上游'}）",
+            "type": "gateway_error"}})
+
+    def handle_stream(self, payload: dict, strategy: str) -> None:
+        tried, last = [], None
+        for p in candidates(strategy):
+            tried.append(p["name"])
+            t0 = time.time()
+            try:
+                resp = open_upstream(p, payload, True)
+            except Exception as exc:               # noqa: BLE001
+                msg = err_text(exc)
+                mark_fail(p, ProviderError(msg))
+                record(p["name"], p["model"], 0, 0, 0.0, False,
+                       int((time.time() - t0) * 1000), msg)
+                last = msg
+                continue
+
+            # 连接已建立，开始向客户端输出
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+            self.send_header("Cache-Control", "no-cache")
+            self.send_header("X-Accel-Buffering", "no")
+            self.send_header("X-Gateway-Provider", p["name"])
+            self.send_header("Transfer-Encoding", "chunked")
+            self.end_headers()
+
+            tin = tout = 0
+            committed = False
+            try:
+                for raw_line in resp:
+                    line = raw_line.decode("utf-8", "ignore").strip()
+                    if not line:
+                        continue
+                    if line.startswith("data:"):
+                        chunk = line[5:].strip()
+                        if chunk == "[DONE]":
+                            self._chunk(b"data: [DONE]\n\n")
+                            break
+                        try:
+                            obj = json.loads(chunk)
+                        except json.JSONDecodeError:
+                            self._chunk((line + "\n\n").encode())
+                            committed = True
+                            continue
+                        u = obj.get("usage") or {}
+                        if u:
+                            tin = int(u.get("prompt_tokens") or tin)
+                            tout = int(u.get("completion_tokens") or tout)
+                    self._chunk((line + "\n\n").encode())
+                    committed = True
+                mark_ok(p)
+                record(p["name"], p["model"], tin, tout,
+                       cost_of(p, tin, tout), True,
+                       int((time.time() - t0) * 1000), "")
+            except (BrokenPipeError, ConnectionResetError):
+                return                                  # 客户端断开，不记错误
+            except Exception as exc:                    # noqa: BLE001
+                msg = err_text(exc)
+                mark_fail(p, ProviderError(msg))
+                record(p["name"], p["model"], 0, 0, 0.0, False,
+                       int((time.time() - t0) * 1000), msg)
+                if committed:
+                    # 已经吐过内容，再切换会让客户端收到重复文本
+                    err = json.dumps({"error": {
+                        "message": f"上游 {p['name']} 中途断开：{msg}",
+                        "type": "gateway_stream_error"}}, ensure_ascii=False)
+                    try:
+                        self._chunk(f"data: {err}\n\n".encode())
+                        self._chunk(b"data: [DONE]\n\n")
+                    except Exception:
+                        pass
+            finally:
+                try:
+                    resp.close()
+                except Exception:
+                    pass
+                try:
+                    self.wfile.write(b"0\r\n\r\n")
+                    self.wfile.flush()
+                except Exception:
+                    pass
+            return
+
+        self.send_json(502, {"error": {
+            "message": f"所有上游均失败：{last}（已尝试：{', '.join(tried) or '无可用上游'}）",
+            "type": "gateway_error"}})
+
+
+ADMIN_HTML = """<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>DeepSeek 网关</title>
+<style>
+  :root{--bg:#0e1116;--card:#161b22;--line:#232a33;--fg:#e6edf3;--dim:#8b949e;
+        --ok:#3fb950;--warn:#d29922;--err:#f85149;--acc:#58a6ff}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--fg);
+       font:14px/1.5 -apple-system,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}
+  .wrap{max-width:1220px;margin:0 auto;padding:20px 14px 56px}
+  h1{font-size:17px;margin:0 0 4px}
+  .sub{color:var(--dim);font-size:12px}
+  .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px;margin:16px 0}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:13px}
+  .card .k{color:var(--dim);font-size:12px}
+  .card .v{font-size:21px;font-weight:600;margin-top:3px}
+  table{width:100%;border-collapse:collapse;background:var(--card);
+        border:1px solid var(--line);border-radius:10px;overflow:hidden}
+  th,td{padding:9px 11px;text-align:left;border-bottom:1px solid var(--line);font-size:13px}
+  th{color:var(--dim);font-weight:500;font-size:12px;background:#11161d;white-space:nowrap}
+  tr:last-child td{border-bottom:none}
+  .tag{display:inline-block;padding:1px 7px;border-radius:99px;font-size:11px;white-space:nowrap}
+  .g{background:rgba(63,185,80,.15);color:var(--ok)}
+  .y{background:rgba(210,153,34,.15);color:var(--warn)}
+  .r{background:rgba(248,81,73,.15);color:var(--err)}
+  .d{background:#21262d;color:var(--dim)}
+  .mono{font-family:ui-monospace,Menlo,Consolas,monospace}
+  button{background:#21262d;color:var(--fg);border:1px solid var(--line);
+         border-radius:7px;padding:5px 10px;cursor:pointer;font-size:12px}
+  button:hover{border-color:var(--acc)}
+  .row{display:flex;gap:10px;align-items:center;margin:12px 0;flex-wrap:wrap}
+  .err{color:var(--err);font-size:11px;max-width:260px;overflow:hidden;
+       text-overflow:ellipsis;white-space:nowrap;display:inline-block}
+  .nm{font-weight:600}
+</style></head><body><div class="wrap">
+  <h1>DeepSeek-V4.1-Flash 聚合网关</h1>
+  <div class="sub">一个端点 · 多上游自动切换 · 每 5 秒刷新</div>
+
+  <div class="cards">
+    <div class="card"><div class="k">24h 请求数</div><div class="v" id="reqs">-</div></div>
+    <div class="card"><div class="k">24h 花费 (USD)</div><div class="v" id="cost">-</div></div>
+    <div class="card"><div class="k">可用上游</div><div class="v" id="live">-</div></div>
+    <div class="card"><div class="k">排序策略</div><div class="v" id="strat" style="font-size:15px">-</div></div>
+  </div>
+
+  <div class="row">
+    <button onclick="load()">刷新</button>
+    <button onclick="reloadCfg()">重载配置</button>
+    <span class="sub" id="msg"></span>
+  </div>
+
+  <table>
+    <thead><tr>
+      <th>上游</th><th>状态</th><th>模型</th><th>量化</th>
+      <th>输入 $/M</th><th>输出 $/M</th><th>24h 请求</th>
+      <th>24h tokens</th><th>24h 花费</th><th>操作</th><th>最近错误</th>
+    </tr></thead>
+    <tbody id="tbody"></tbody>
+  </table>
+</div>
+<script>
+const tok = () => localStorage.getItem('gw_token') || '';
+const H = () => ({'Authorization':'Bearer '+tok(),'Content-Type':'application/json'});
+
+async function load(){
+  try{
+    const r = await fetch('/admin/api/status', {headers:H()});
+    if(r.status===401){ ask(); return; }
+    const d = await r.json();
+    document.getElementById('reqs').textContent = d.total_requests_24h;
+    document.getElementById('cost').textContent = '$' + d.total_cost_24h.toFixed(4);
+    document.getElementById('live').textContent =
+      d.providers.filter(p=>p.enabled&&p.has_key&&p.cooldown===0).length
+      + ' / ' + d.providers.length;
+    document.getElementById('strat').textContent = d.strategy;
+    document.getElementById('tbody').innerHTML = d.providers.map(p=>{
+      let st, cls;
+      if(!p.enabled){ st='已停用'; cls='d'; }
+      else if(!p.has_key){ st='缺密钥'; cls='d'; }
+      else if(p.cooldown>0){ st='冷却 '+p.cooldown+'s'; cls='r'; }
+      else if(p.fails>0){ st='重试中'; cls='y'; }
+      else { st='正常'; cls='g'; }
+      const t = p.tokens_in_24h + p.tokens_out_24h;
+      const btn = p.enabled
+        ? `<button onclick="tog('${p.name}',false)">停用</button>`
+        : `<button onclick="tog('${p.name}',true)">启用</button>`;
+      return `<tr>
+        <td><span class="nm">${p.name}</span><div class="sub">${p.note||''}</div></td>
+        <td><span class="tag ${cls}">${st}</span></td>
+        <td class="mono">${p.model}</td>
+        <td>${p.quant}</td>
+        <td class="mono">${p.price_in.toFixed(4)}</td>
+        <td class="mono">${p.price_out.toFixed(4)}</td>
+        <td>${p.requests_24h}</td>
+        <td>${t.toLocaleString()}</td>
+        <td class="mono">$${p.cost_24h.toFixed(4)}</td>
+        <td>${btn}</td>
+        <td><span class="err" title="${(p.last_error||'').replace(/"/g,'&quot;')}">${p.last_error||'-'}</span></td>
+      </tr>`;
+    }).join('');
+  }catch(e){ document.getElementById('msg').textContent = '加载失败：'+e; }
+}
+
+function ask(){
+  const v = prompt('请输入访问口令（安装时设置，留空则直接回车）：');
+  if(v !== null){ localStorage.setItem('gw_token', v.trim()); load(); }
+}
+
+async function reloadCfg(){
+  const r = await fetch('/admin/api/reload', {method:'POST', headers:H()});
+  const d = await r.json();
+  document.getElementById('msg').textContent = d.ok ? '配置已重载' : ('失败：'+d.error);
+  load();
+}
+
+async function tog(name, enabled){
+  const r = await fetch('/admin/api/toggle', {method:'POST', headers:H(),
+    body: JSON.stringify({name, enabled})});
+  const d = await r.json();
+  if(!d.ok) document.getElementById('msg').textContent = '操作失败：' + d.error;
+  load();
+}
+
+load(); setInterval(load, 5000);
+</script></body></html>"""
+
+
+def main() -> int:
+    os.makedirs(DATA_DIR, exist_ok=True)
+    init_db()
+    load_config()
+
+    try:
+        srv = ThreadingHTTPServer((HOST, PORT), Handler)
+    except OSError as exc:
+        print(f"[gateway] 监听 {HOST}:{PORT} 失败：{exc}", flush=True)
+        return 1
+    srv.daemon_threads = True
+
+    def _shutdown(signum, frame):        # noqa: ARG001
+        threading.Thread(target=srv.shutdown, daemon=True).start()
+
+    signal.signal(signal.SIGTERM, _shutdown)
+    signal.signal(signal.SIGINT, _shutdown)
+
+    live = sum(1 for p in PROVIDERS if p["enabled"] and p["api_key"])
+    print(f"[gateway] 监听 http://{HOST}:{PORT}  上游 {len(PROVIDERS)} 个 / 可用 {live} 个",
+          flush=True)
+    try:
+        srv.serve_forever()
+    finally:
+        srv.server_close()
+        print("[gateway] 已退出", flush=True)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
