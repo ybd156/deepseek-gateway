@@ -49,7 +49,8 @@ def main() -> int:
     print("== 1. 必需路径 ==")
     for p in ["manifest", "ICON.PNG", "ICON_256.PNG", "app", "cmd",
               "wizard", "config/privilege", "config/resource",
-              "app/gateway.py", "app/service.sh", "app/providers.json"]:
+              "app/gateway.py", "app/service.sh", "app/providers.json",
+              "app/opencode_upstream.py", "app/opencode-serve.sh"]:
         check(os.path.exists(p), p)
 
     print("== 2. manifest 字段 ==")
@@ -95,6 +96,12 @@ def main() -> int:
         bad_quota = [p["name"] for p in provs
                      if p.get("free_only") and not isinstance(p.get("free_quota_tokens"), int)]
         check(not bad_quota, "免费上游都声明了 free_quota_tokens", str(bad_quota))
+
+        bad_type = [p["name"] for p in provs
+                    if str(p.get("type", "http")).lower() not in ("http", "opencode")]
+        check(not bad_type, "type 只能是 http / opencode", str(bad_type))
+        oc = [p for p in provs if str(p.get("type", "")).lower() == "opencode"]
+        check(all(p.get("model") for p in oc), "opencode 上游必须声明 model", str([p["name"] for p in oc]))
     except Exception as exc:                           # noqa: BLE001
         check(False, "providers.json 解析", str(exc))
 
