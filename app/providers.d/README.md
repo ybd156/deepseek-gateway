@@ -90,4 +90,9 @@
 | 硅基流动 | Free 标签模型免费 | 必须用带 Free 标签的模型名 |
 | 魔搭 ModelScope | 2000 次/天（单模型 500） | 走 `api-inference.modelscope.cn/v1` |
 
+> **加不进来的**：OpenCode 的 `opencode/deepseek-v4.1-flash-free` 虽然是真免费，但官方限制
+> 只能在 OpenCode 客户端内使用——外部调用 `opencode.ai/inference/openai/v1` 会返回
+> `403 FreeTierError`。别浪费时间往里加。
+> 正确用法是反过来：让 OpenCode 把本网关当作 provider（见主 README「客户端接入」）。
+
 额度政策随时会变，**填之前去控制台确认一次**，然后按实际数字写 `free_quota_tokens`。
