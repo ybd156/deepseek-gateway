@@ -11,6 +11,22 @@
 
 ---
 
+## 默认配置：只跑免费，不花钱
+
+| 层 | 花费 |
+|---|---|
+| 网关程序本身（跑在你的飞牛上） | **免费**。零第三方包，一个 Python 进程 |
+| GitHub Actions 编译 | **免费**。私有仓库 2000 分钟/月，实测一次 15 秒 |
+| 调用的上游模型 | **默认只启用免费上游，付费全部关闭** |
+
+默认 `providers.json` 里只有 `volc-ark`（火山方舟，每模型 50 万 tokens 免费额度）是 `enabled: true`，
+其余 9 个上游全部 `enabled: false`。想用付费的，自己改开关。
+
+**关键：免费额度用尽不会静默转付费。** 带 `free_only: true` 的上游会由网关自己累计 token 用量，
+达到 `free_quota_tokens` 就自动停用、切下一家，面板上标红「额度用尽」。钱不会悄悄流走。
+
+---
+
 ## 最快路径：从 GitHub Actions 直接下载 .fpk
 
 **不需要在本机装 fnpack。** 仓库自带 workflow，每次 push 自动跑测试并打包：
@@ -44,7 +60,8 @@
 ├── ICON.PNG  ICON_256.PNG       # 包图标 64 / 256
 ├── app/
 │   ├── gateway.py               # 网关本体（单文件，零依赖）
-│   ├── providers.json           # 上游池默认模板
+│   ├── providers.json           # 上游池默认模板（免费优先，付费默认关闭）
+│   ├── providers.d/README.md    # 新增上游的模板与字段说明
 │   ├── service.sh               # 生成 run.sh + 启停控制
 │   └── ui/
 │       ├── config               # 桌面入口：iframe 打开 http://<nas>:18787/admin
@@ -154,9 +171,9 @@ curl http://192.168.1.10:18787/v1/chat/completions \
 
 ---
 
-## 五、改上游池
+## 五、上游池：改已有的 / 加新的
 
-编辑 `/vol{n}/@appconf/deepseek-gateway/providers.json`，回面板点「重载配置」：
+主配置在 `/vol{n}/@appconf/deepseek-gateway/providers.json`，改完回面板点「重载配置」：
 
 ```json
 {
@@ -194,6 +211,54 @@ curl http://192.168.1.10:18787/v1/chat/completions \
 | `strict_model` | `true` = 校验不过就换下一家；`false` = 只加个警告头 |
 | `extra` | 原样并入请求体（OpenRouter 用来钉死某个 provider） |
 | `price_in/price_out` | USD / 百万 tokens，用于成本估算和 `cheapest` 排序 |
+| `free_only` | `true` = 计入免费额度硬卡；额度用尽自动停用，**绝不转付费** |
+| `free_quota_tokens` | 免费额度总量（tokens）；`free_only=true` 且 >0 时生效 |
+
+### 怎么加一个新的免费上游（不用改主配置）
+
+在 `providers.d/` 里丢一个 json 就行：
+
+```
+/vol{n}/@appconf/deepseek-gateway/providers.d/my-provider.json
+```
+
+```json
+{
+  "providers": [
+    {
+      "name": "my-free-provider",
+      "enabled": true,
+      "priority": 15,
+      "base_url": "https://api.example.com/v1",
+      "api_key_env": "MY_PROVIDER_KEY",
+      "model": "deepseek-v4.1-flash",
+      "model_contains": "deepseek",
+      "free_only": true,
+      "free_quota_tokens": 1000000,
+      "price_in": 0.15,
+      "price_out": 0.6,
+      "quant": "fp8",
+      "note": "某某云：新用户 100 万 tokens"
+    }
+  ]
+}
+```
+
+密钥写进 `@appdata/deepseek-gateway/secrets.json`（没有就新建，**不会被应用设置覆盖**）：
+
+```json
+{ "MY_PROVIDER_KEY": "sk-xxxx" }
+```
+
+然后面板点「重载配置」即可。规则：同名 `name` 覆盖主配置里的那一条，其余按 `priority` 参与排序；
+某个文件解析失败只跳过它自己，不影响其他。
+
+### 想用付费上游
+
+把对应条目的 `enabled` 改 `true`，或直接在面板上点「启用」。
+
+⚠️ **开之前先核对单价**：`price_in/price_out` 是我写死的估算值，会过期；真实账单以各平台控制台为准。
+付费条目没有 `free_only`，所以网关**不会**替你把关——开了就是真花钱。
 
 ---
 
