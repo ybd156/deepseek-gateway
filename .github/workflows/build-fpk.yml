@@ -29,6 +29,12 @@ jobs:
       - name: 端到端冒烟测试
         run: python3 scripts/smoke_test.py
 
+      - name: 清理 Python 缓存（冒烟测试会生成 __pycache__，不能打进包）
+        run: |
+          find . -name '__pycache__' -type d -prune -exec rm -rf {} + 2>/dev/null || true
+          find . -name '*.pyc' -delete 2>/dev/null || true
+          echo "剩余 pyc：$(find . -name '*.pyc' | wc -l)"
+
       - name: 下载 fnpack
         env:
           FNPACK_URL: ${{ vars.FNPACK_URL }}
@@ -61,6 +67,9 @@ jobs:
           # 复制到与 appname 同名的目录再打包，避免目录名与 manifest 不一致
           mkdir -p ".build/$APPNAME"
           cp -r manifest ICON.PNG ICON_256.PNG app cmd config wizard ".build/$APPNAME/"
+          # 兜底：万一还有缓存，别打进包
+          find ".build/$APPNAME" -name '__pycache__' -type d -prune -exec rm -rf {} + 2>/dev/null || true
+          find ".build/$APPNAME" -name '*.pyc' -delete 2>/dev/null || true
           chmod +x ".build/$APPNAME"/cmd/* ".build/$APPNAME"/app/service.sh ".build/$APPNAME"/app/opencode-serve.sh
 
           ./fnpack build --directory ".build/$APPNAME"
