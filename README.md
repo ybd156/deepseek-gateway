@@ -132,7 +132,7 @@ sudo mv fnpack-1.2.3-linux-amd64 /usr/local/bin/fnpack
 | 基础设置 | 访问口令 | 留空 = 局域网免口令；填了客户端需带 `Bearer` |
 | | 排序策略 | `稳定优先` / `省钱优先`（按价格从低到高） |
 | | 失败冷却基数 | 默认 60 秒，连续失败按 1×2×3×… 递增，最多 6× |
-| 上游密钥 | OpenRouter / 火山方舟 / 硅基流动 / 腾讯 TokenHub / 百度千帆 / DeepSeek 官方 | **至少填一个**，没填的自动跳过 |
+| 上游密钥 | OpenRouter / 火山方舟 / 华为云 MaaS / NVIDIA NIM / 硅基流动 / 腾讯 TokenHub / 百度千帆 / DeepSeek 官方 | **至少填一个**，没填的自动跳过 |
 | 网络代理 | HTTP/HTTPS 代理 | 海外上游需要；国内域名已自动进 `NO_PROXY` |
 
 装完想改：应用中心 → DeepSeek 网关 → **设置**（走 `wizard/config`，保存后自动重启服务）。
