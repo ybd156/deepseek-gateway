@@ -45,6 +45,11 @@ DEFAULT_COOLDOWN = int(os.getenv("COOLDOWN_SECONDS", "60"))
 PORT = int(os.getenv("PORT", "18787"))
 HOST = os.getenv("HOST", "0.0.0.0")
 
+# 运行时设置（面板里改的，落盘到 DATA_DIR/settings.json）
+SETTINGS_PATH = os.path.join(DATA_DIR, "settings.json")
+RUNTIME: dict = {"strategy": "priority", "cooldown": DEFAULT_COOLDOWN,
+                 "gateway_token": GATEWAY_TOKEN}
+
 PROVIDERS: list[dict] = []
 SETTINGS: dict = {}
 STATE: dict[str, dict] = {}
@@ -113,6 +118,52 @@ def key_source(key_env: str) -> str:
     return "无"
 
 
+# ── 运行时设置：面板里改策略/冷却/口令，落盘 settings.json ──
+def load_runtime() -> None:
+    data: dict = {}
+    try:
+        with open(SETTINGS_PATH, encoding="utf-8") as fh:
+            data = json.load(fh) or {}
+    except Exception:
+        data = {}
+
+    strategy = str(data.get("strategy") or os.getenv("STRATEGY") or "").strip().lower()
+    if strategy not in ("priority", "cheapest"):
+        strategy = "priority"
+
+    try:
+        cooldown = int(data.get("cooldown_seconds") or os.getenv("COOLDOWN_SECONDS") or 60)
+    except Exception:
+        cooldown = 60
+
+    # 文件里显式给了 gateway_token（哪怕是空串）就以文件为准
+    if "gateway_token" in data:
+        token = str(data.get("gateway_token") or "").strip()
+    else:
+        token = GATEWAY_TOKEN
+
+    RUNTIME.update(strategy=strategy, cooldown=max(1, cooldown), gateway_token=token)
+
+
+def save_runtime(patch: dict) -> None:
+    data: dict = {}
+    try:
+        with open(SETTINGS_PATH, encoding="utf-8") as fh:
+            data = json.load(fh) or {}
+    except Exception:
+        data = {}
+    data.update(patch)
+    os.makedirs(DATA_DIR, exist_ok=True)
+    tmp = SETTINGS_PATH + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump(data, fh, ensure_ascii=False, indent=2)
+    try:
+        os.chmod(tmp, 0o600)
+    except Exception:
+        pass
+    os.replace(tmp, SETTINGS_PATH)
+
+
 def provider_files() -> list[str]:
     """主配置 + providers.d/ 下所有 *.json（便于单独新增上游，不必改主文件）。"""
     files = [CONFIG_PATH]
@@ -151,10 +202,7 @@ def load_config() -> None:
                     raw_providers.append(it)
 
         SETTINGS = settings
-        # 允许用环境变量覆盖排序策略（对应安装向导里的选择）
-        env_strategy = (os.getenv("STRATEGY") or "").strip().lower()
-        if env_strategy in ("priority", "cheapest"):
-            SETTINGS["strategy"] = env_strategy
+        load_runtime()
         overrides = read_overrides()
         secrets = load_secrets()
         default_timeout = int(SETTINGS.get("request_timeout", 180))
@@ -315,7 +363,7 @@ def mark_fail(p: dict, err: Exception) -> None:
     with STATE_LOCK:
         st = STATE.setdefault(p["name"], {})
         st["fails"] = st.get("fails", 0) + 1
-        st["cooldown_until"] = time.time() + DEFAULT_COOLDOWN * min(st["fails"], 6)
+        st["cooldown_until"] = time.time() + RUNTIME["cooldown"] * min(st["fails"], 6)
         st["last_error"] = str(err)[:300]
         st["last_error_at"] = time.time()
 
@@ -448,11 +496,12 @@ def call_provider(p: dict, payload: dict) -> tuple[dict, str]:
 
 
 def authorized(handler: BaseHTTPRequestHandler) -> bool:
-    if not GATEWAY_TOKEN:
+    token = RUNTIME["gateway_token"]
+    if not token:
         return True
     auth = handler.headers.get("Authorization", "")
-    token = auth[7:].strip() if auth.lower().startswith("bearer ") else ""
-    return token == GATEWAY_TOKEN
+    got = auth[7:].strip() if auth.lower().startswith("bearer ") else ""
+    return got == token
 
 
 # ─────────────────────────── HTTP 处理 ───────────────────────────
@@ -529,6 +578,8 @@ class Handler(BaseHTTPRequestHandler):
             self.handle_probe()
         elif path == "/admin/api/set-key":
             self.handle_set_key()
+        elif path == "/admin/api/set-settings":
+            self.handle_set_settings()
         else:
             self.send_json(404, {"error": "not found"})
 
@@ -575,6 +626,53 @@ class Handler(BaseHTTPRequestHandler):
                 "ms": int((time.time() - t0) * 1000),
                 "error": err_text(exc)[:300],
             })
+
+    def handle_set_settings(self) -> None:
+        """面板里改排序策略 / 冷却 / 访问口令（写 data/settings.json）。"""
+        if not authorized(self):
+            self.send_json(401, {"error": "unauthorized"})
+            return
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+            body = json.loads(self.rfile.read(length) or b"{}")
+        except Exception:
+            self.send_json(400, {"ok": False, "error": "bad request"})
+            return
+
+        patch: dict = {}
+        if "strategy" in body:
+            s = str(body["strategy"]).strip().lower()
+            if s not in ("priority", "cheapest"):
+                self.send_json(400, {"ok": False, "error": "strategy 只能是 priority / cheapest"})
+                return
+            patch["strategy"] = s
+        if "cooldown_seconds" in body:
+            try:
+                cd = int(body["cooldown_seconds"])
+            except Exception:
+                self.send_json(400, {"ok": False, "error": "冷却必须是整数秒"})
+                return
+            patch["cooldown_seconds"] = max(1, min(cd, 3600))
+        if "gateway_token" in body:
+            patch["gateway_token"] = str(body["gateway_token"] or "").strip()
+
+        if not patch:
+            self.send_json(400, {"ok": False, "error": "没有要更新的字段"})
+            return
+
+        try:
+            save_runtime(patch)
+            load_runtime()
+        except Exception as exc:                    # noqa: BLE001
+            self.send_json(500, {"ok": False, "error": str(exc)})
+            return
+
+        self.send_json(200, {
+            "ok": True,
+            "strategy": RUNTIME["strategy"],
+            "cooldown_seconds": RUNTIME["cooldown"],
+            "auth_enabled": bool(RUNTIME["gateway_token"]),
+        })
 
     def handle_set_key(self) -> None:
         """面板里直接填/清某个上游的 Key（写进 data/secrets.json，优先于向导）。"""
@@ -660,7 +758,9 @@ class Handler(BaseHTTPRequestHandler):
                 "exhausted": is_exhausted(p, used),
             })
         return {
-            "strategy": SETTINGS.get("strategy", "priority"),
+            "strategy": RUNTIME["strategy"],
+            "cooldown_seconds": RUNTIME["cooldown"],
+            "auth_enabled": bool(RUNTIME["gateway_token"]),
             "total_cost_24h": round(sum(r["cost_24h"] for r in rows), 6),
             "total_requests_24h": sum(r["requests_24h"] for r in rows),
             "providers": rows,
@@ -702,7 +802,7 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         strategy = (self.headers.get("X-Route-Strategy")
-                    or SETTINGS.get("strategy") or "priority").lower()
+                    or RUNTIME["strategy"] or "priority").lower()
         if strategy not in ("priority", "cheapest"):
             strategy = "priority"
 
@@ -940,9 +1040,17 @@ ADMIN_HTML = """<!doctype html>
   </div>
 
   <div class="row">
-    <span class="sub" style="margin:0">口令</span>
-    <input id="tok" type="password" class="k" placeholder="GATEWAY_TOKEN（没设就留空）">
-    <button onclick="saveTok()">应用</button>
+    <span class="sub" style="margin:0">访问口令</span>
+    <input id="setTok" type="password" class="k" placeholder="留空 = 免口令" style="max-width:150px">
+    <button onclick="clearTok()">清除</button>
+    <span class="sub" style="margin:0">策略</span>
+    <select id="setStrat" class="k" style="max-width:130px">
+      <option value="priority">稳定优先</option>
+      <option value="cheapest">省钱优先</option>
+    </select>
+    <span class="sub" style="margin:0">冷却</span>
+    <input id="setCd" type="number" class="k" min="1" max="3600" style="max-width:72px">
+    <button onclick="saveSettings()">保存设置</button>
     <button onclick="load()">刷新</button>
     <button onclick="reloadCfg()">重载配置</button>
     <span class="sub" id="msg"></span>
@@ -964,7 +1072,7 @@ const H = () => ({'Authorization':'Bearer '+tok(),'Content-Type':'application/js
 async function load(){
   try{
     const r = await fetch('/admin/api/status', {headers:H()});
-    if(r.status===401){ msg('口令不对：请在上方「口令」里填入安装时设的值，点「应用」'); return; }
+    if(r.status===401){ msg('口令不对：请在上方「访问口令」里填入正确口令，点「保存设置」'); return; }
     const d = await r.json();
     document.getElementById('reqs').textContent = d.total_requests_24h;
     document.getElementById('cost').textContent = '$' + d.total_cost_24h.toFixed(4);
@@ -972,6 +1080,13 @@ async function load(){
       d.providers.filter(p=>p.enabled&&p.has_key&&p.cooldown===0&&!p.exhausted).length
       + ' / ' + d.providers.length;
     document.getElementById('strat').textContent = d.strategy;
+    if(!inited){
+      document.getElementById('setStrat').value = d.strategy;
+      document.getElementById('setCd').value = d.cooldown_seconds;
+      document.getElementById('setTok').placeholder =
+        d.auth_enabled ? '已设置（留空不改）' : '留空 = 免口令';
+      inited = true;
+    }
     document.getElementById('tbody').innerHTML = d.providers.map(p=>{
       let st, cls;
       if(!p.enabled){ st='已停用'; cls='d'; }
@@ -1016,10 +1131,37 @@ async function load(){
 
 function msg(t){ document.getElementById('msg').textContent = t; }
 
-function saveTok(){
-  const v = (document.getElementById('tok').value || '').trim();
-  localStorage.setItem('gw_token', v);
-  msg(v ? '口令已保存到本浏览器' : '已清空口令');
+let inited = false;
+
+async function saveSettings(){
+  const tok = (document.getElementById('setTok').value || '').trim();
+  const body = {
+    strategy: document.getElementById('setStrat').value,
+    cooldown_seconds: parseInt(document.getElementById('setCd').value || '60', 10)
+  };
+  if(tok) body.gateway_token = tok;
+  try{
+    const r = await fetch('/admin/api/set-settings', {method:'POST', headers:H(),
+      body: JSON.stringify(body)});
+    const d = await r.json();
+    if(d.ok){
+      if(tok) localStorage.setItem('gw_token', tok);
+      document.getElementById('setTok').value = '';
+      msg('设置已保存：策略 ' + d.strategy + '，冷却 ' + d.cooldown_seconds + 's'
+          + (d.auth_enabled ? '，口令已启用' : '，未设口令'));
+    } else { msg('保存失败：' + (d.error || '未知错误')); }
+  }catch(e){ msg('保存失败：' + e); }
+  load();
+}
+
+async function clearTok(){
+  try{
+    const r = await fetch('/admin/api/set-settings', {method:'POST', headers:H(),
+      body: JSON.stringify({gateway_token: ''})});
+    const d = await r.json();
+    if(d.ok){ localStorage.removeItem('gw_token'); msg('已清除访问口令（局域网免口令）'); }
+    else { msg('失败：' + (d.error || '')); }
+  }catch(e){ msg('失败：' + e); }
   load();
 }
 
