@@ -10,6 +10,7 @@
   6. /admin/api/status 与 toggle 启停
   7. 重载配置
   8. providers.d/ 合并 + 免费额度硬卡（free_only/free_quota_tokens）
+  9. type=opencode 上游（假 opencode serve：会话创建/发消息/删除、流式缓冲、probe）
 """
 from __future__ import annotations
 
@@ -32,6 +33,7 @@ GATEWAY = os.path.join(ROOT, "app", "gateway.py")
 
 GW_PORT = 18888
 UP_PORT = 18999
+OC_PORT = 18998            # 假 opencode server
 DEAD_PORT = 18997          # 没有任何服务监听，用来测故障切换
 
 MODEL = "deepseek/deepseek-v4.1-flash-1017"
@@ -91,6 +93,41 @@ class Upstream(BaseHTTPRequestHandler):
         self.wfile.flush()
 
 
+class FakeOpenCode(BaseHTTPRequestHandler):
+    """假 opencode serve：只实现网关用到的那三个接口。"""
+    protocol_version = "HTTP/1.1"
+
+    def log_message(self, *a):
+        pass
+
+    def _json(self, code: int, obj) -> None:
+        data = json.dumps(obj, ensure_ascii=False).encode()
+        self.send_response(code)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
+    def do_POST(self):
+        length = int(self.headers.get("Content-Length") or 0)
+        body = json.loads(self.rfile.read(length) or b"{}")
+        if self.path == "/session":
+            self._json(200, {"id": "ses_test123"})
+        elif self.path.endswith("/message"):
+            parts = body.get("parts") or [{}]
+            text = str(parts[0].get("text") or "")
+            model = (body.get("model") or {}).get("modelID", "unknown")
+            self._json(200, {
+                "info": {"modelID": model, "tokens": {"input": 12, "output": 7}},
+                "parts": [{"type": "text", "text": "OC[" + text[:24] + "]"}],
+            })
+        else:
+            self._json(404, {"error": "not found"})
+
+    def do_DELETE(self):
+        self._json(200, {"ok": True})
+
+
 def free_port(port: int) -> bool:
     s = socket.socket()
     s.settimeout(0.5)
@@ -114,8 +151,8 @@ def http(method: str, url: str, body=None, headers=None, raw=False, timeout=20):
 
 
 def main() -> int:
-    if not free_port(GW_PORT) or not free_port(UP_PORT):
-        print(f"端口 {GW_PORT}/{UP_PORT} 被占用，换端口后重试")
+    if not free_port(GW_PORT) or not free_port(UP_PORT) or not free_port(OC_PORT):
+        print(f"端口 {GW_PORT}/{UP_PORT}/{OC_PORT} 被占用，换端口后重试")
         return 2
 
     # 放在仓库内固定路径，避免系统临时目录在受限沙箱下不可写
@@ -151,6 +188,10 @@ def main() -> int:
     upstream = ThreadingHTTPServer(("127.0.0.1", UP_PORT), Upstream)
     upstream.daemon_threads = True
     threading.Thread(target=upstream.serve_forever, daemon=True).start()
+
+    oc = ThreadingHTTPServer(("127.0.0.1", OC_PORT), FakeOpenCode)
+    oc.daemon_threads = True
+    threading.Thread(target=oc.serve_forever, daemon=True).start()
 
     env = dict(os.environ,
                CONFIG_PATH=cfg_path, DATA_DIR=data_dir,
@@ -269,6 +310,48 @@ def main() -> int:
         check(tiny.get("used_tokens", 0) >= 30, "已用 token 计数正确",
               str(tiny.get("used_tokens")))
 
+        print("== 9. type=opencode 上游（驱动 opencode serve）==")
+        with open(os.path.join(pd, "opencode.json"), "w", encoding="utf-8") as fh:
+            json.dump({"providers": [{
+                "name": "opencode-free", "type": "opencode", "enabled": True,
+                "priority": 0, "base_url": f"http://127.0.0.1:{OC_PORT}",
+                "model": "deepseek-v4.1-flash-free",
+                "opencode_provider": "opencode",
+                "free_only": True, "free_quota_tokens": 0,
+                "price_in": 0, "price_out": 0, "quant": "-",
+                "note": "假 opencode",
+            }]}, fh, ensure_ascii=False)
+        http("POST", base + "/admin/api/reload", {})
+
+        code, hdrs, txt = http("POST", base + "/v1/chat/completions",
+                               {"messages": [{"role": "user", "content": "你好"}]})
+        check(hdrs.get("X-Gateway-Provider") == "opencode-free",
+              "命中 opencode 上游", str(hdrs.get("X-Gateway-Provider")))
+        body = json.loads(txt) if code == 200 else {}
+        content = body.get("choices", [{}])[0].get("message", {}).get("content", "")
+        check(content.startswith("OC["), "内容来自 opencode server", content[:40])
+        check(body.get("usage", {}).get("prompt_tokens") == 12, "usage 已透传",
+              str(body.get("usage")))
+
+        code, hdrs, txt = http("POST", base + "/v1/chat/completions",
+                               {"messages": [{"role": "user", "content": "你好"}],
+                                "stream": True})
+        check(code == 200 and "data: [DONE]" in txt,
+              "opencode 上游的流式（缓冲后分块）可用")
+        check(hdrs.get("X-Gateway-Stream") == "buffered", "标记为 buffered 流",
+              str(hdrs.get("X-Gateway-Stream")))
+
+        code, _, txt = http("POST", base + "/admin/api/probe", {"name": "opencode-free"})
+        probe = json.loads(txt) if code == 200 else {}
+        check(probe.get("ok") is True, "probe 自检通过", str(probe.get("error")))
+
+        # 停用后应回落到其它上游，而不是 502
+        http("POST", base + "/admin/api/toggle", {"name": "opencode-free", "enabled": False})
+        code, hdrs, _ = http("POST", base + "/v1/chat/completions",
+                             {"messages": [{"role": "user", "content": "你好"}]})
+        check(code == 200 and hdrs.get("X-Gateway-Provider") == "good",
+              "停用 opencode 后正常回落", str(hdrs.get("X-Gateway-Provider")))
+
     finally:
         proc.terminate()
         try:
@@ -276,6 +359,7 @@ def main() -> int:
         except Exception:
             proc.kill()
         upstream.shutdown()
+        oc.shutdown()
         shutil.rmtree(tmp, ignore_errors=True)
 
     print()
