@@ -1,0 +1,96 @@
+name: build-fpk
+
+on:
+  push:
+    branches: [main, master]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: 测试并打包 .fpk
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 结构自检（打包前先把问题拦下来）
+        run: python3 scripts/check_structure.py
+
+      - name: 端到端冒烟测试
+        run: python3 scripts/smoke_test.py
+
+      - name: 下载 fnpack
+        env:
+          FNPACK_URL: ${{ vars.FNPACK_URL }}
+        run: |
+          set -euo pipefail
+          ARCH="$(uname -m)"
+          if [ -n "${FNPACK_URL:-}" ]; then
+            URL="$FNPACK_URL"
+          else
+            case "$ARCH" in
+              x86_64)  URL="https://static2.fnnas.com/fnpack/fnpack-1.2.3-linux-amd64" ;;
+              aarch64) URL="https://static2.fnnas.com/fnpack/fnpack-1.2.3-linux-arm64" ;;
+              *) echo "::error::不支持的 runner 架构：$ARCH"; exit 1 ;;
+            esac
+          fi
+          echo "下载：$URL"
+          curl -fL --retry 3 --retry-delay 3 --max-time 180 "$URL" -o fnpack
+          chmod +x fnpack
+          echo "--- fnpack 自检 ---"
+          ./fnpack --help || ./fnpack -h || true
+
+      - name: 打包
+        id: build
+        run: |
+          set -euo pipefail
+          APPNAME="$(grep -E '^appname=' manifest | head -n1 | cut -d= -f2 | tr -d '[:space:]')"
+          VERSION="$(grep -E '^version=' manifest | head -n1 | cut -d= -f2 | tr -d '[:space:]')"
+          echo "appname=$APPNAME version=$VERSION"
+
+          # 复制到与 appname 同名的目录再打包，避免目录名与 manifest 不一致
+          mkdir -p ".build/$APPNAME"
+          cp -r manifest ICON.PNG ICON_256.PNG app cmd config wizard ".build/$APPNAME/"
+          chmod +x ".build/$APPNAME"/cmd/* ".build/$APPNAME"/app/service.sh
+
+          ./fnpack build --directory ".build/$APPNAME"
+
+          FPK="$(find . -maxdepth 4 -name '*.fpk' -not -path './.git/*' | head -n1)"
+          if [ -z "$FPK" ]; then echo "::error::没有生成 .fpk"; exit 1; fi
+
+          mkdir -p dist
+          OUT="dist/${APPNAME}-${VERSION}.fpk"
+          mv "$FPK" "$OUT"
+          ls -lh "$OUT"
+          echo "fpk=$OUT" >> "$GITHUB_OUTPUT"
+
+      - name: 上传构建产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: fpk
+          path: ${{ steps.build.outputs.fpk }}
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: 打 tag 时自动发 Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ steps.build.outputs.fpk }}
+          generate_release_notes: true
+          body: |
+            飞牛 fnOS 应用包（DeepSeek 网关）。
+
+            **纯 Python 标准库实现，不依赖 Docker 与任何第三方包。**
+
+            安装方式：
+            1. 下载下方 `.fpk` 文件
+            2. 飞牛「应用中心」→ 右上角「手动安装」→ 选择该文件
+            3. 或 SSH：`appcenter-cli install-fpk <文件名>.fpk`
+
+            默认端口 **18787**，装完在飞牛桌面点「DeepSeek 网关」即可打开面板。
