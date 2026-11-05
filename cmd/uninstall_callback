@@ -1,0 +1,5 @@
+#!/bin/bash
+# 卸载后：清理运行脚本与字节码（用量账本在应用数据目录，随应用一起由飞牛处理）
+rm -f "$TRIM_PKGVAR/run.sh" 2>/dev/null
+rm -rf "$TRIM_APPDEST/__pycache__" 2>/dev/null
+exit 0
