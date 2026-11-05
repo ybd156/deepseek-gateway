@@ -66,6 +66,20 @@
       },
       {
         "type": "password",
+        "field": "wizard_huawei_key",
+        "label": "华为云 ModelArts Studio Key（200 万 tokens）",
+        "initValue": "",
+        "rules": []
+      },
+      {
+        "type": "password",
+        "field": "wizard_nvidia_key",
+        "label": "NVIDIA NIM Key（nvapi-…，免费端点）",
+        "initValue": "",
+        "rules": []
+      },
+      {
+        "type": "password",
         "field": "wizard_siliconflow_key",
         "label": "硅基流动 API Key（国内直连）",
         "initValue": "",
