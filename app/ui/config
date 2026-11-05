@@ -1,0 +1,13 @@
+{
+  ".url": {
+    "deepseek-gateway.main": {
+      "title": "DeepSeek 网关",
+      "icon": "images/icon_{0}.png",
+      "type": "iframe",
+      "protocol": "http",
+      "port": "18787",
+      "url": "/admin",
+      "allUsers": true
+    }
+  }
+}
