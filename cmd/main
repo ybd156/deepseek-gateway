@@ -1,0 +1,22 @@
+#!/bin/bash
+# 运行控制：start / stop / status
+. "$TRIM_APPDEST/service.sh"
+
+case "$1" in
+    start)
+        gw_start
+        ;;
+    stop)
+        gw_stop
+        ;;
+    status)
+        if gw_running; then
+            exit 0
+        fi
+        exit 3
+        ;;
+    *)
+        echo "Unknown command: $1" > "$TRIM_TEMP_LOGFILE"
+        exit 1
+        ;;
+esac
