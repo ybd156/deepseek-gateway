@@ -11,6 +11,7 @@
   7. 重载配置
   8. providers.d/ 合并 + 免费额度硬卡（free_only/free_quota_tokens）
   9. type=opencode 上游（假 opencode serve：会话创建/发消息/删除、流式缓冲、probe）
+ 10. 面板填 Key（/admin/api/set-key → secrets.json 落盘、来源标记、清空）
 """
 from __future__ import annotations
 
@@ -276,17 +277,28 @@ def main() -> int:
         pd = os.path.join(tmp, "providers.d")
         os.makedirs(pd, exist_ok=True)
         with open(os.path.join(pd, "extra.json"), "w", encoding="utf-8") as fh:
-            json.dump({"providers": [{
-                "name": "quota-tiny", "enabled": True, "priority": 0,
-                "base_url": f"http://127.0.0.1:{UP_PORT}", "model": MODEL,
-                "api_key": "k", "free_only": True, "free_quota_tokens": 30,
-                "price_in": 0.0, "price_out": 0.0, "quant": "-",
-                "note": "配额只有 30 tokens",
-            }]}, fh, ensure_ascii=False)
+            json.dump({"providers": [
+                {
+                    "name": "quota-tiny", "enabled": True, "priority": 0,
+                    "base_url": f"http://127.0.0.1:{UP_PORT}", "model": MODEL,
+                    "api_key": "k", "free_only": True, "free_quota_tokens": 30,
+                    "price_in": 0.0, "price_out": 0.0, "quant": "-",
+                    "note": "配额只有 30 tokens",
+                },
+                {
+                    # 用来测「面板填 Key」：有 api_key_env 但没给 key
+                    "name": "keytest", "enabled": False, "priority": 99,
+                    "base_url": f"http://127.0.0.1:{UP_PORT}", "model": MODEL,
+                    "api_key_env": "TEST_KEY_X", "free_only": True,
+                    "free_quota_tokens": 0, "price_in": 0.0, "price_out": 0.0,
+                    "quant": "-", "note": "测密钥写入",
+                },
+            ]}, fh, ensure_ascii=False)
 
         http("POST", base + "/admin/api/reload", {})
         code, _, txt = http("GET", base + "/healthz")
-        check(json.loads(txt)["providers"] == 4, "providers.d 的文件已并入（4 个上游）", txt)
+        check(json.loads(txt)["providers"] == 5,
+              "providers.d 的文件已并入（3 + 2 = 5 个上游）", txt)
 
         code, hdrs, _ = http("POST", base + "/v1/chat/completions",
                              {"messages": [{"role": "user", "content": "ping"}]})
@@ -351,6 +363,32 @@ def main() -> int:
                              {"messages": [{"role": "user", "content": "你好"}]})
         check(code == 200 and hdrs.get("X-Gateway-Provider") == "good",
               "停用 opencode 后正常回落", str(hdrs.get("X-Gateway-Provider")))
+
+        print("== 10. 面板填 Key（/admin/api/set-key → secrets.json）==")
+        code, _, txt = http("POST", base + "/admin/api/set-key",
+                            {"name": "keytest", "key": "sk-test-abc"})
+        d = json.loads(txt) if code == 200 else {}
+        check(code == 200 and d.get("ok") and d.get("has_key"), "写入密钥成功", txt[:120])
+        check(d.get("source") == "面板", "来源标记为「面板」", str(d.get("source")))
+
+        code, _, txt = http("GET", base + "/admin/api/status")
+        st = json.loads(txt)
+        kt = next((p for p in st["providers"] if p["name"] == "keytest"), {})
+        check(kt.get("has_key") is True and kt.get("key_source") == "面板",
+              "状态接口反映密钥来源", f"{kt.get('has_key')} / {kt.get('key_source')}")
+
+        # secrets.json 真的落盘了
+        sec_path = os.path.join(data_dir, "secrets.json")
+        check(os.path.exists(sec_path), "secrets.json 已生成", sec_path)
+        if os.path.exists(sec_path):
+            sec = json.load(open(sec_path, encoding="utf-8"))
+            check(sec.get("TEST_KEY_X") == "sk-test-abc", "密钥内容正确", str(list(sec)))
+
+        # 清空
+        code, _, txt = http("POST", base + "/admin/api/set-key",
+                            {"name": "keytest", "key": ""})
+        d = json.loads(txt) if code == 200 else {}
+        check(code == 200 and d.get("ok") and not d.get("has_key"), "清空密钥成功", txt[:120])
 
     finally:
         proc.terminate()
