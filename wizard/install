@@ -1,0 +1,113 @@
+[
+  {
+    "stepTitle": "基础设置",
+    "items": [
+      {
+        "type": "tips",
+        "helpText": "本应用会启动一个本地 OpenAI 兼容网关（默认端口 18787，已避开 8080/3000/8000 等常用端口）。纯 Python 标准库运行，不依赖 Docker，装完即可用。"
+      },
+      {
+        "type": "password",
+        "field": "wizard_gateway_token",
+        "label": "访问口令（可留空）",
+        "initValue": "",
+        "rules": []
+      },
+      {
+        "type": "tips",
+        "helpText": "留空表示局域网内免口令访问。公网或多人环境请设置口令，客户端需带 Authorization: Bearer <口令>。"
+      },
+      {
+        "type": "select",
+        "field": "wizard_strategy",
+        "label": "上游排序策略",
+        "initValue": "priority",
+        "options": [
+          { "label": "稳定优先（按配置优先级）", "value": "priority" },
+          { "label": "省钱优先（按价格从低到高）", "value": "cheapest" }
+        ],
+        "rules": []
+      },
+      {
+        "type": "text",
+        "field": "wizard_cooldown",
+        "label": "失败冷却基数（秒）",
+        "initValue": "60",
+        "rules": [
+          { "pattern": "^[0-9]+$", "message": "请填写整数秒数" }
+        ]
+      }
+    ]
+  },
+  {
+    "stepTitle": "上游密钥",
+    "items": [
+      {
+        "type": "tips",
+        "helpText": "至少填一个。没填的上游会自动跳过，不会报错。密钥只写入本机（700 权限的运行脚本），不会上传。"
+      },
+      {
+        "type": "password",
+        "field": "wizard_openrouter_key",
+        "label": "OpenRouter API Key",
+        "initValue": "",
+        "rules": []
+      },
+      {
+        "type": "tips",
+        "helpText": "OpenRouter 走海外网络，需要代理；填了它才能用到 Morph / Particle AI / DeepInfra 等低价档。"
+      },
+      {
+        "type": "password",
+        "field": "wizard_volc_key",
+        "label": "火山方舟 API Key（国内直连）",
+        "initValue": "",
+        "rules": []
+      },
+      {
+        "type": "password",
+        "field": "wizard_siliconflow_key",
+        "label": "硅基流动 API Key（国内直连）",
+        "initValue": "",
+        "rules": []
+      },
+      {
+        "type": "password",
+        "field": "wizard_tencent_key",
+        "label": "腾讯云 TokenHub Key（可选）",
+        "initValue": "",
+        "rules": []
+      },
+      {
+        "type": "password",
+        "field": "wizard_baidu_key",
+        "label": "百度千帆 Key（可选）",
+        "initValue": "",
+        "rules": []
+      },
+      {
+        "type": "password",
+        "field": "wizard_deepseek_key",
+        "label": "DeepSeek 官方 Key（兜底，可选）",
+        "initValue": "",
+        "rules": []
+      }
+    ]
+  },
+  {
+    "stepTitle": "网络代理（可选）",
+    "items": [
+      {
+        "type": "tips",
+        "helpText": "如果访问海外上游需要代理，填代理地址，例如 http://192.168.1.10:7890。国内上游已自动加入 NO_PROXY，不会绕代理。"
+      },
+      {
+        "type": "text",
+        "field": "wizard_http_proxy",
+        "label": "HTTP/HTTPS 代理地址",
+        "initValue": "",
+        "rules": []
+      }
+    ]
+  }
+]
