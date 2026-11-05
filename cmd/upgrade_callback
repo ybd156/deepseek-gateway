@@ -1,0 +1,14 @@
+#!/bin/bash
+# 升级后：保留用户配置，重新生成运行脚本
+LOG="$TRIM_PKGVAR/upgrade.log"
+: > "$LOG" 2>/dev/null
+
+CFG="$TRIM_PKGETC/providers.json"
+if [ ! -f "$CFG" ]; then
+    cp "$TRIM_APPDEST/providers.json" "$CFG" >>"$LOG" 2>&1
+fi
+
+. "$TRIM_APPDEST/service.sh"
+write_run >>"$LOG" 2>&1
+
+exit 0
