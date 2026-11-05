@@ -1,0 +1,6 @@
+#!/bin/bash
+# 升级前：备份上游配置，便于回滚
+if [ -f "$TRIM_PKGETC/providers.json" ]; then
+    cp "$TRIM_PKGETC/providers.json" "$TRIM_PKGETC/providers.json.bak" 2>/dev/null
+fi
+exit 0
