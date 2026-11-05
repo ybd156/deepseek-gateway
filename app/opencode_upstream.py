@@ -57,6 +57,19 @@ class OpenCodeClient:
             except Exception:
                 pass
             raise OpenCodeError(f"HTTP {exc.code} {path}: {detail}") from None
+        except urllib.error.URLError as exc:
+            reason = getattr(exc, "reason", exc)
+            text = str(reason).lower()
+            if isinstance(reason, ConnectionRefusedError) or "refused" in text:
+                raise OpenCodeError(
+                    f"连不上 opencode server（{self.base}）——它没在运行。"
+                    f"先在本机执行 `opencode serve --port 4096 --hostname 127.0.0.1`"
+                    f"（或 app/opencode-serve.sh），再点自检。"
+                    f"不想用就把这一行停用。") from None
+            if "timed out" in text or "timeout" in text:
+                raise OpenCodeError(
+                    f"连接 {self.base} 超时：server 可能还在启动，或卡住了") from None
+            raise OpenCodeError(f"请求 {self.base}{path} 失败：{reason}") from None
         except Exception as exc:                      # noqa: BLE001
             raise OpenCodeError(f"{type(exc).__name__} {path}: {exc}") from None
 
