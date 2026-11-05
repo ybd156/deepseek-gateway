@@ -70,6 +70,18 @@ def main() -> int:
         except Exception as exc:                       # noqa: BLE001
             check(False, f, str(exc))
 
+    print("== 3b. 安装向导里不应有输入项 ==")
+    INPUT_TYPES = {"password", "text", "select", "switch", "radio", "checkbox"}
+    for f in ["wizard/install", "wizard/config"]:
+        try:
+            steps = json.load(open(f, encoding="utf-8"))
+            types = [str(it.get("type")) for st in steps
+                     for it in (st.get("items") or [])]
+            bad = [t for t in types if t in INPUT_TYPES]
+            check(not bad, f"{f} 只有说明文字（配置都在面板里）", str(bad))
+        except Exception as exc:                       # noqa: BLE001
+            check(False, f"{f} 解析", str(exc))
+
     print("== 4. 上游配置结构 ==")
     check(os.path.exists("app/providers.d/README.md"), "app/providers.d/README.md（新增上游的模板）")
     try:
