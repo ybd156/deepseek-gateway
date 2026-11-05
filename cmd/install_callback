@@ -1,0 +1,29 @@
+#!/bin/bash
+# 安装后：铺默认上游配置、生成运行脚本、脚本自检
+LOG="$TRIM_PKGVAR/install.log"
+mkdir -p "$TRIM_PKGVAR" "$TRIM_PKGETC" 2>/dev/null
+: > "$LOG" 2>/dev/null
+
+# 1) 首次安装铺一份 providers.json（已存在不覆盖）
+CFG="$TRIM_PKGETC/providers.json"
+if [ ! -f "$CFG" ]; then
+    if ! cp "$TRIM_APPDEST/providers.json" "$CFG" >>"$LOG" 2>&1; then
+        echo "初始化 providers.json 失败，请检查应用配置目录权限。" > "$TRIM_TEMP_LOGFILE"
+        exit 1
+    fi
+fi
+
+# 2) 生成 run.sh（含密钥，700）
+. "$TRIM_APPDEST/service.sh"
+if ! write_run >>"$LOG" 2>&1; then
+    echo "生成运行配置失败，请检查应用数据目录权限。" > "$TRIM_TEMP_LOGFILE"
+    exit 1
+fi
+
+# 3) 语法自检，把问题拦在安装阶段
+if ! python3 -m py_compile "$TRIM_APPDEST/gateway.py" >>"$LOG" 2>&1; then
+    echo "网关脚本自检失败，详见日志：$LOG" > "$TRIM_TEMP_LOGFILE"
+    exit 1
+fi
+
+exit 0
