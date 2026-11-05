@@ -8,6 +8,8 @@
   4. 故障切换（第一个上游连不上 → 自动切到第二个）
   5. 严格 model 校验失败 → 自动跳过该上游
   6. /admin/api/status 与 toggle 启停
+  7. 重载配置
+  8. providers.d/ 合并 + 免费额度硬卡（free_only/free_quota_tokens）
 """
 from __future__ import annotations
 
@@ -227,6 +229,45 @@ def main() -> int:
         print("== 7. 重载配置 ==")
         code, _, txt = http("POST", base + "/admin/api/reload", {})
         check(code == 200 and json.loads(txt).get("ok"), "重载成功", txt)
+
+        print("== 8. providers.d/ 合并 + 免费额度硬卡 ==")
+        # 丢一个 json 进 providers.d，重载后应自动并入；配额设 30 tokens（每次调用 15）
+        pd = os.path.join(tmp, "providers.d")
+        os.makedirs(pd, exist_ok=True)
+        with open(os.path.join(pd, "extra.json"), "w", encoding="utf-8") as fh:
+            json.dump({"providers": [{
+                "name": "quota-tiny", "enabled": True, "priority": 0,
+                "base_url": f"http://127.0.0.1:{UP_PORT}", "model": MODEL,
+                "api_key": "k", "free_only": True, "free_quota_tokens": 30,
+                "price_in": 0.0, "price_out": 0.0, "quant": "-",
+                "note": "配额只有 30 tokens",
+            }]}, fh, ensure_ascii=False)
+
+        http("POST", base + "/admin/api/reload", {})
+        code, _, txt = http("GET", base + "/healthz")
+        check(json.loads(txt)["providers"] == 4, "providers.d 的文件已并入（4 个上游）", txt)
+
+        code, hdrs, _ = http("POST", base + "/v1/chat/completions",
+                             {"messages": [{"role": "user", "content": "ping"}]})
+        check(hdrs.get("X-Gateway-Provider") == "quota-tiny", "首次命中配额上游",
+              str(hdrs.get("X-Gateway-Provider")))
+
+        code, hdrs, _ = http("POST", base + "/v1/chat/completions",
+                             {"messages": [{"role": "user", "content": "ping"}]})
+        check(hdrs.get("X-Gateway-Provider") == "quota-tiny", "额度未满时继续用它",
+              str(hdrs.get("X-Gateway-Provider")))
+
+        code, hdrs, _ = http("POST", base + "/v1/chat/completions",
+                             {"messages": [{"role": "user", "content": "ping"}]})
+        check(hdrs.get("X-Gateway-Provider") == "good", "额度用尽后自动跳过、切下一家",
+              str(hdrs.get("X-Gateway-Provider")))
+
+        code, _, txt = http("GET", base + "/admin/api/status")
+        st = json.loads(txt)
+        tiny = next((p for p in st["providers"] if p["name"] == "quota-tiny"), {})
+        check(tiny.get("exhausted") is True, "面板标记额度用尽", str(tiny.get("exhausted")))
+        check(tiny.get("used_tokens", 0) >= 30, "已用 token 计数正确",
+              str(tiny.get("used_tokens")))
 
     finally:
         proc.terminate()
