@@ -43,6 +43,7 @@
 | 字段 | 必填 | 说明 |
 |---|---|---|
 | `name` | ✅ | 唯一标识，改名会丢历史统计 |
+| `type` | | `http`（默认，OpenAI 兼容上游）/ `opencode`（驱动本地 `opencode serve`） |
 | `base_url` | ✅ | OpenAI 兼容根地址，**不要**带结尾斜杠，网关自己拼 `/chat/completions` |
 | `model` | ✅ | 该平台上的模型 ID，从控制台复制，大小写敏感 |
 | `api_key_env` | | 密钥来源的环境变量名（见下） |
