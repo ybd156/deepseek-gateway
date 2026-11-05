@@ -1,0 +1,19 @@
+#!/bin/bash
+# 配置变更后：重写 run.sh 并重启服务，让新密钥 / 策略立刻生效
+LOG="$TRIM_PKGVAR/config.log"
+: > "$LOG" 2>/dev/null
+
+. "$TRIM_APPDEST/service.sh"
+
+if ! write_run >>"$LOG" 2>&1; then
+    echo "写入运行配置失败，请检查应用数据目录权限。" > "$TRIM_TEMP_LOGFILE"
+    exit 1
+fi
+
+gw_stop >>"$LOG" 2>&1
+if ! gw_start >>"$LOG" 2>&1; then
+    echo "重启服务失败，详见日志：$LOG" > "$TRIM_TEMP_LOGFILE"
+    exit 1
+fi
+
+exit 0
