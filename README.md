@@ -152,6 +152,43 @@ sudo mv fnpack-1.2.3-linux-amd64 /usr/local/bin/fnpack
 - 24h 请求数、tokens、花费、最近错误
 - **启用 / 停用**（写 `overrides.json`，不动 `providers.json`）
 - **重载配置**（改完 JSON 点一下，不用重启）
+- **自检**（真发一次极小请求，直接显示返回样例或报错）
+
+### 在面板里填 Key（不用飞牛设置页面）
+
+**不需要**打开飞牛的「应用设置」，面板表格里每行都有一个「密钥」输入框：
+
+1. 打开 `http://<nas>:18787/admin`
+2. 找到要用的上游（比如 `volc-ark`），在「密钥」列输入框里粘贴 Key
+3. 点「存」→ 立刻写入 `@appdata/deepseek-gateway/secrets.json` 并热重载
+4. 再点这一行的「启用」，最后点「自检」确认能通
+
+输入框的占位文字会显示密钥来源：
+
+| 占位 | 含义 |
+|---|---|
+| `面板` | 你在这里填的（**优先级最高**） |
+| `向导` | 安装向导里填的（存在 run.sh） |
+| `配置` | 直接写在 providers.json 里的 `api_key` |
+| `无` | 还没配 |
+| `本地` | `type=opencode`，不需要 Key |
+
+清空输入框再点「存」= 删掉面板里的这个 Key（回退到向导/配置里的值）。
+
+**命令行兜底**（面板打不开时）：
+
+```bash
+vi /vol1/@appdata/deepseek-gateway/secrets.json
+```
+
+```json
+{
+  "VOLC_ARK_API_KEY": "你的key",
+  "HUAWEI_MAAS_KEY": "你的key"
+}
+```
+
+保存后在面板点「重载配置」，或 `cmd/main stop && cmd/main start`。
 
 ### 客户端接入
 
