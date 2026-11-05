@@ -1,0 +1,5 @@
+#!/bin/bash
+# 卸载前：先停服务，避免残留进程占着端口
+. "$TRIM_APPDEST/service.sh"
+gw_stop
+exit 0
