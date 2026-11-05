@@ -54,6 +54,20 @@
       },
       {
         "type": "password",
+        "field": "wizard_huawei_key",
+        "label": "华为云 ModelArts Studio Key",
+        "initValue": "",
+        "rules": []
+      },
+      {
+        "type": "password",
+        "field": "wizard_nvidia_key",
+        "label": "NVIDIA NIM Key",
+        "initValue": "",
+        "rules": []
+      },
+      {
+        "type": "password",
         "field": "wizard_siliconflow_key",
         "label": "硅基流动 API Key",
         "initValue": "",
