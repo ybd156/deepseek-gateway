@@ -61,7 +61,7 @@ jobs:
           # 复制到与 appname 同名的目录再打包，避免目录名与 manifest 不一致
           mkdir -p ".build/$APPNAME"
           cp -r manifest ICON.PNG ICON_256.PNG app cmd config wizard ".build/$APPNAME/"
-          chmod +x ".build/$APPNAME"/cmd/* ".build/$APPNAME"/app/service.sh
+          chmod +x ".build/$APPNAME"/cmd/* ".build/$APPNAME"/app/service.sh ".build/$APPNAME"/app/opencode-serve.sh
 
           ./fnpack build --directory ".build/$APPNAME"
 
