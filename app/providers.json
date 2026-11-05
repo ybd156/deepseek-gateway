@@ -8,6 +8,22 @@
   },
   "providers": [
     {
+      "name": "opencode-free",
+      "type": "opencode",
+      "enabled": false,
+      "priority": 5,
+      "base_url": "http://127.0.0.1:4096",
+      "model": "deepseek-v4.1-flash-free",
+      "opencode_provider": "opencode",
+      "model_contains": "",
+      "free_only": true,
+      "free_quota_tokens": 0,
+      "price_in": 0,
+      "price_out": 0,
+      "quant": "-",
+      "note": "OpenCode 免费档：先在本机跑 opencode serve（见 README）；限时免费、无流式、200K 上下文"
+    },
+    {
       "name": "volc-ark",
       "enabled": true,
       "priority": 10,
