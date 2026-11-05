@@ -1,110 +1,18 @@
 [
   {
-    "stepTitle": "基础设置",
-    "items": [
-      {
-        "type": "password",
-        "field": "wizard_gateway_token",
-        "label": "访问口令（留空 = 免口令）",
-        "initValue": "",
-        "rules": []
-      },
-      {
-        "type": "select",
-        "field": "wizard_strategy",
-        "label": "上游排序策略",
-        "initValue": "priority",
-        "options": [
-          { "label": "稳定优先（按配置优先级）", "value": "priority" },
-          { "label": "省钱优先（按价格从低到高）", "value": "cheapest" }
-        ],
-        "rules": []
-      },
-      {
-        "type": "text",
-        "field": "wizard_cooldown",
-        "label": "失败冷却基数（秒）",
-        "initValue": "60",
-        "rules": [
-          { "pattern": "^[0-9]+$", "message": "请填写整数秒数" }
-        ]
-      }
-    ]
-  },
-  {
-    "stepTitle": "上游密钥",
+    "stepTitle": "配置在网关面板里",
     "items": [
       {
         "type": "tips",
-        "helpText": "保存后服务会自动重启。留空的项会被清掉：只想改某一项时，其余项请原样重新填写。"
+        "helpText": "这里不提供配置项。所有设置（API Key、访问口令、排序策略、失败冷却、上游启停）都在网关自己的面板里改："
       },
       {
-        "type": "password",
-        "field": "wizard_openrouter_key",
-        "label": "OpenRouter API Key",
-        "initValue": "",
-        "rules": []
+        "type": "tips",
+        "helpText": "飞牛桌面 →「DeepSeek 网关」，或直接访问 http://<飞牛IP>:18787/admin"
       },
       {
-        "type": "password",
-        "field": "wizard_volc_key",
-        "label": "火山方舟 API Key",
-        "initValue": "",
-        "rules": []
-      },
-      {
-        "type": "password",
-        "field": "wizard_huawei_key",
-        "label": "华为云 ModelArts Studio Key",
-        "initValue": "",
-        "rules": []
-      },
-      {
-        "type": "password",
-        "field": "wizard_nvidia_key",
-        "label": "NVIDIA NIM Key",
-        "initValue": "",
-        "rules": []
-      },
-      {
-        "type": "password",
-        "field": "wizard_siliconflow_key",
-        "label": "硅基流动 API Key",
-        "initValue": "",
-        "rules": []
-      },
-      {
-        "type": "password",
-        "field": "wizard_tencent_key",
-        "label": "腾讯云 TokenHub Key",
-        "initValue": "",
-        "rules": []
-      },
-      {
-        "type": "password",
-        "field": "wizard_baidu_key",
-        "label": "百度千帆 Key",
-        "initValue": "",
-        "rules": []
-      },
-      {
-        "type": "password",
-        "field": "wizard_deepseek_key",
-        "label": "DeepSeek 官方 Key",
-        "initValue": "",
-        "rules": []
-      }
-    ]
-  },
-  {
-    "stepTitle": "网络代理（可选）",
-    "items": [
-      {
-        "type": "text",
-        "field": "wizard_http_proxy",
-        "label": "HTTP/HTTPS 代理地址",
-        "initValue": "",
-        "rules": []
+        "type": "tips",
+        "helpText": "改完立即生效，不需要重启应用。"
       }
     ]
   }
