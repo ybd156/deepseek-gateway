@@ -1,0 +1,13 @@
+#!/bin/bash
+# 安装前：确认 Python 版本够用（本应用只用标准库，不装任何依赖）
+if ! command -v python3 >/dev/null 2>&1; then
+    echo "未检测到 python3。请先在飞牛上安装 Python 3.8 或更高版本。" > "$TRIM_TEMP_LOGFILE"
+    exit 1
+fi
+
+if ! python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 8) else 1)'; then
+    echo "需要 Python 3.8 及以上版本，当前为 $(python3 -V 2>&1)。" > "$TRIM_TEMP_LOGFILE"
+    exit 1
+fi
+
+exit 0
