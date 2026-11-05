@@ -1,0 +1,26 @@
+# 构建产物
+*.fpk
+dist/
+.build/
+.testtmp/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# 本机打包工具（不提交二进制）
+fnpack
+fnpack.exe
+
+# 运行时数据与密钥，绝不提交
+.env
+data/
+*.db
+providers.local.json
+
+# 系统
+.DS_Store
+Thumbs.db
+desktop.ini
