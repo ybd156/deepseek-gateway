@@ -85,6 +85,8 @@
 
 | 平台 | 额度 | 备注 |
 |---|---|---|
+| **华为云 ModelArts Studio** | 每模型 **200 万 tokens** | 国内额度最大；需实名，region 选贵阳一；模型名/base_url 以控制台为准 |
+| **NVIDIA NIM** | 免费端点（额度说法不一） | `integrate.api.nvidia.com/v1`，模型 `deepseek-ai/deepseek-v4.1-flash`；需海外网络 |
 | 火山方舟 | 每模型 50 万 tokens | 默认已启用 |
 | 腾讯云 TokenHub | 新人 100 万 tokens / 90 天 | 模型名以控制台为准 |
 | 百度千帆 | 每模型 100 万 tokens / 3 个月 | 模型名以控制台为准 |
