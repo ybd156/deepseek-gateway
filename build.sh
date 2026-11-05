@@ -30,6 +30,10 @@ python3 scripts/check_structure.py
 echo "==> 端到端冒烟测试"
 python3 scripts/smoke_test.py
 
+echo "==> 清理 Python 缓存"
+find . -name '__pycache__' -type d -prune -exec rm -rf {} + 2>/dev/null || true
+find . -name '*.pyc' -delete 2>/dev/null || true
+
 echo "==> 开始打包"
 fnpack build
 
