@@ -2,11 +2,33 @@
 # 服务控制与运行配置生成（被 cmd/main 与 cmd/config_callback 复用）
 
 # ── 生成运行包装脚本：把密钥写进 700 权限的 run.sh，避免出现在进程列表里 ──
+# 注意：向导里留空的项会沿用上一次 run.sh 的值，避免升级后点一下设置就把旧 key 冲掉
 write_run() {
     local run="$TRIM_PKGVAR/run.sh"
+    local old="$TRIM_PKGVAR/run.sh"
     local port
     port="$(printf '%s' "${TRIM_SERVICE_PORT:-18787}" | tr -cd '0-9')"
     [ -n "$port" ] || port=18787
+
+    # 从旧 run.sh 里取某个 export 的现有值
+    oldval() {
+        [ -f "$old" ] || return 0
+        sed -n "s/^export $1='\(.*\)'\$/\1/p" "$old" 2>/dev/null | head -n1
+    }
+
+    local v_token v_cd v_strat v_or v_volc v_sf v_tc v_bd v_nv v_hw v_ds v_proxy
+    v_token="$( [ -n "${wizard_gateway_token:-}" ] && printf '%s' "$wizard_gateway_token" || oldval GATEWAY_TOKEN )"
+    v_cd="$( [ -n "${wizard_cooldown:-}" ] && printf '%s' "$wizard_cooldown" || oldval COOLDOWN_SECONDS )"
+    v_strat="$( [ -n "${wizard_strategy:-}" ] && printf '%s' "$wizard_strategy" || oldval STRATEGY )"
+    v_or="$( [ -n "${wizard_openrouter_key:-}" ] && printf '%s' "$wizard_openrouter_key" || oldval OPENROUTER_API_KEY )"
+    v_volc="$( [ -n "${wizard_volc_key:-}" ] && printf '%s' "$wizard_volc_key" || oldval VOLC_ARK_API_KEY )"
+    v_sf="$( [ -n "${wizard_siliconflow_key:-}" ] && printf '%s' "$wizard_siliconflow_key" || oldval SILICONFLOW_API_KEY )"
+    v_tc="$( [ -n "${wizard_tencent_key:-}" ] && printf '%s' "$wizard_tencent_key" || oldval TENCENT_TOKENHUB_KEY )"
+    v_bd="$( [ -n "${wizard_baidu_key:-}" ] && printf '%s' "$wizard_baidu_key" || oldval BAIDU_QIANFAN_KEY )"
+    v_nv="$( [ -n "${wizard_nvidia_key:-}" ] && printf '%s' "$wizard_nvidia_key" || oldval NVIDIA_NIM_API_KEY )"
+    v_hw="$( [ -n "${wizard_huawei_key:-}" ] && printf '%s' "$wizard_huawei_key" || oldval HUAWEI_MAAS_KEY )"
+    v_ds="$( [ -n "${wizard_deepseek_key:-}" ] && printf '%s' "$wizard_deepseek_key" || oldval DEEPSEEK_API_KEY )"
+    v_proxy="$( [ -n "${wizard_http_proxy:-}" ] && printf '%s' "$wizard_http_proxy" || oldval HTTP_PROXY )"
 
     mkdir -p "$TRIM_PKGVAR" || return 1
 
@@ -15,26 +37,26 @@ write_run() {
         cat > "$run" <<EOF
 #!/bin/bash
 # 本文件由飞牛应用在安装/配置时自动生成，请勿手工编辑
-# 要改密钥或策略，请到「应用中心 → DeepSeek 网关 → 设置」
+# 要改密钥或策略，请打开网关面板（http://<nas>:18787/admin）直接改
 export CONFIG_PATH='$TRIM_PKGETC/providers.json'
 export DATA_DIR='$TRIM_PKGVAR'
 export PORT='$port'
-export GATEWAY_TOKEN='${wizard_gateway_token:-}'
-export COOLDOWN_SECONDS='${wizard_cooldown:-60}'
-export STRATEGY='${wizard_strategy:-priority}'
-export OPENROUTER_API_KEY='${wizard_openrouter_key:-}'
-export VOLC_ARK_API_KEY='${wizard_volc_key:-}'
-export SILICONFLOW_API_KEY='${wizard_siliconflow_key:-}'
-export TENCENT_TOKENHUB_KEY='${wizard_tencent_key:-}'
-export BAIDU_QIANFAN_KEY='${wizard_baidu_key:-}'
-export NVIDIA_NIM_API_KEY='${wizard_nvidia_key:-}'
-export HUAWEI_MAAS_KEY='${wizard_huawei_key:-}'
-export DEEPSEEK_API_KEY='${wizard_deepseek_key:-}'
-if [ -n '${wizard_http_proxy:-}' ]; then
-    export HTTP_PROXY='${wizard_http_proxy}'
-    export HTTPS_PROXY='${wizard_http_proxy}'
+export GATEWAY_TOKEN='$v_token'
+export COOLDOWN_SECONDS='${v_cd:-60}'
+export STRATEGY='${v_strat:-priority}'
+export OPENROUTER_API_KEY='$v_or'
+export VOLC_ARK_API_KEY='$v_volc'
+export SILICONFLOW_API_KEY='$v_sf'
+export TENCENT_TOKENHUB_KEY='$v_tc'
+export BAIDU_QIANFAN_KEY='$v_bd'
+export NVIDIA_NIM_API_KEY='$v_nv'
+export HUAWEI_MAAS_KEY='$v_hw'
+export DEEPSEEK_API_KEY='$v_ds'
+if [ -n '$v_proxy' ]; then
+    export HTTP_PROXY='$v_proxy'
+    export HTTPS_PROXY='$v_proxy'
 fi
-export NO_PROXY='localhost,127.0.0.1,ark.cn-beijing.volces.com,api.siliconflow.cn,api.deepseek.com,tokenhub.tencentmaas.com,qianfan.baidubce.com'
+export NO_PROXY='localhost,127.0.0.1,ark.cn-beijing.volces.com,api.siliconflow.cn,api.deepseek.com,tokenhub.tencentmaas.com,qianfan.baidubce.com,api.modelarts-maas.com'
 exec python3 '$TRIM_APPDEST/gateway.py'
 EOF
         chmod 700 "$run"
