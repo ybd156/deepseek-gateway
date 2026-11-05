@@ -169,6 +169,40 @@ curl http://192.168.1.10:18787/v1/chat/completions \
 
 省钱模式（单次请求）：加请求头 `X-Route-Strategy: cheapest`。
 
+### OpenCode / Cline 这类 Agent 怎么接
+
+OpenCode 支持自定义 OpenAI 兼容 provider，把网关当成一个 provider 加进去就行：
+
+`~/.config/opencode/opencode.json`（或项目根的 `opencode.json`）
+
+```json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "provider": {
+    "fnos-gateway": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "飞牛网关",
+      "options": {
+        "baseURL": "http://192.168.1.10:18787/v1",
+        "apiKey": "sk-fnos-change-me"
+      },
+      "models": {
+        "deepseek-v4.1-flash": { "name": "DeepSeek V4.1 Flash（网关）" }
+      }
+    }
+  },
+  "model": "fnos-gateway/deepseek-v4.1-flash"
+}
+```
+
+`apiKey` 填安装时设的访问口令（没设就随便填一个非空字符串）。
+模型名可以随便写——**网关会忽略客户端传的 `model`，统一映射到各上游自己的模型 ID**。
+
+> ⚠️ 反过来不行：OpenCode 自带的免费模型 `opencode/deepseek-v4.1-flash-free` **只能在其客户端内使用**。
+> 从外部调用 `https://opencode.ai/inference/openai/v1/chat/completions` 会返回
+> `403 FreeTierError: OpenCode's free tier can only be used from within OpenCode`。
+> 所以它没法作为本网关的上游；想用它的免费额度，就在 OpenCode 里直接用那个模型。
+
 ---
 
 ## 五、上游池：改已有的 / 加新的
