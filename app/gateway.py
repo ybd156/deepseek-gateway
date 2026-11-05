@@ -33,6 +33,8 @@ import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse
 
+from opencode_upstream import OpenCodeClient, OpenCodeError
+
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.getenv("CONFIG_PATH") or os.path.join(BASE_DIR, "providers.json")
 DATA_DIR = os.getenv("DATA_DIR") or os.path.join(BASE_DIR, "data")
@@ -154,6 +156,13 @@ def load_config() -> None:
                 "free_only": bool(it.get("free_only", False)),
                 "free_quota_tokens": int(it.get("free_quota_tokens", 0) or 0),
                 "extra": it.get("extra") or {},
+                # type=http：OpenAI 兼容 HTTP 上游（默认）
+                # type=opencode：驱动本地 opencode serve（见 opencode_upstream.py）
+                "type": str(it.get("type", "http") or "http").lower(),
+                "opencode_provider": str(it.get("opencode_provider", "opencode") or "opencode"),
+                "opencode_agent": str(it.get("opencode_agent", "") or ""),
+                "opencode_tools": it.get("opencode_tools"),
+                "opencode_extra": it.get("opencode_extra") or {},
                 "note": str(it.get("note", "")),
             })
         PROVIDERS = items
@@ -258,7 +267,8 @@ def candidates(strategy: str) -> list[dict]:
     with STATE_LOCK:
         live = [
             p for p in PROVIDERS
-            if p["enabled"] and p["api_key"]
+            if p["enabled"]
+            and (p["api_key"] or p["type"] == "opencode")   # opencode 走本地，不需要 key
             and STATE.get(p["name"], {}).get("cooldown_until", 0) <= now
             and not is_exhausted(p, used)
         ]
@@ -345,6 +355,66 @@ def cost_of(p: dict, tin: int, tout: int) -> float:
     return tin / 1_000_000 * p["price_in"] + tout / 1_000_000 * p["price_out"]
 
 
+def render_prompt(payload: dict) -> str:
+    """把 OpenAI 的 messages 摊平成一段文本（OpenCode 收的是单条 prompt）。"""
+    msgs = payload.get("messages") or []
+    if len(msgs) == 1 and str(msgs[0].get("role")) == "user":
+        content = msgs[0].get("content")
+        if isinstance(content, str):
+            return content
+    out = []
+    for m in msgs:
+        role = str(m.get("role") or "user")
+        content = m.get("content")
+        if isinstance(content, list):      # 多模态分片，只取文本部分
+            content = " ".join(str(x.get("text") or "")
+                               for x in content if isinstance(x, dict))
+        label = {"system": "System", "user": "User",
+                 "assistant": "Assistant"}.get(role, role)
+        out.append(f"{label}: {content}")
+    return "\n\n".join(out)
+
+
+def call_provider(p: dict, payload: dict) -> tuple[dict, str]:
+    """统一调用入口，返回 (OpenAI 形状的 dict, 警告信息)。
+
+    type=http     → 打上游的 OpenAI 兼容 /chat/completions
+    type=opencode → 驱动本地 opencode serve（建会话→发消息→删会话）
+    """
+    if p["type"] == "opencode":
+        client = OpenCodeClient(
+            base_url=p["base_url"], model_id=p["model"],
+            provider_id=p["opencode_provider"], agent=p["opencode_agent"],
+            tools=p["opencode_tools"], timeout=p["timeout"],
+            extra=p["opencode_extra"])
+        try:
+            data = client.chat(render_prompt(payload))
+        except OpenCodeError as exc:
+            raise ProviderError(str(exc)) from None
+        upstream = str(data.pop("_upstream_model", "") or data.get("model") or "")
+        return data, check_model(p, {"model": upstream})
+
+    req = urllib.request.Request(
+        p["base_url"] + "/chat/completions",
+        data=build_body(p, payload, bool(payload.get("stream"))),
+        headers=headers_for(p, bool(payload.get("stream"))),
+        method="POST")
+    try:
+        resp = urllib.request.urlopen(req, timeout=p["timeout"])
+        try:
+            raw = resp.read()
+        finally:
+            resp.close()
+    except Exception as exc:                  # noqa: BLE001
+        raise ProviderError(err_text(exc)) from None
+
+    try:
+        data = json.loads(raw.decode("utf-8", "ignore"))
+    except Exception as exc:                  # noqa: BLE001
+        raise ProviderError(f"响应不是合法 JSON：{exc}") from None
+    return data, check_model(p, data)
+
+
 def authorized(handler: BaseHTTPRequestHandler) -> bool:
     if not GATEWAY_TOKEN:
         return True
@@ -423,10 +493,55 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json(500, {"ok": False, "error": str(exc)})
         elif path == "/admin/api/toggle":
             self.handle_toggle()
+        elif path == "/admin/api/probe":
+            self.handle_probe()
         else:
             self.send_json(404, {"error": "not found"})
 
     # ---- 管理接口 ----
+    def handle_probe(self) -> None:
+        """单上游连通性自检：真发一次极小请求，把结果（含报错）返回给面板。"""
+        if not authorized(self):
+            self.send_json(401, {"error": "unauthorized"})
+            return
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+            name = str(json.loads(self.rfile.read(length) or b"{}").get("name", ""))
+        except Exception:
+            self.send_json(400, {"ok": False, "error": "bad request"})
+            return
+
+        p = next((x for x in PROVIDERS if x["name"] == name), None)
+        if p is None:
+            self.send_json(404, {"ok": False, "error": "unknown provider"})
+            return
+        if not p["api_key"] and p["type"] != "opencode":
+            self.send_json(200, {"ok": False, "provider": name,
+                                 "error": "没有密钥，先在上游配置里填 api_key_env"})
+            return
+
+        payload = {"messages": [{"role": "user", "content": "回复 OK 两个字，不要做其他操作"}]}
+        t0 = time.time()
+        try:
+            data, warn = call_provider(p, payload)
+            try:
+                sample = str(data["choices"][0]["message"]["content"] or "")
+            except Exception:                       # noqa: BLE001
+                sample = ""
+            self.send_json(200, {
+                "ok": True, "provider": name,
+                "ms": int((time.time() - t0) * 1000),
+                "sample": sample[:200],
+                "warning": warn,
+                "usage": data.get("usage") or {},
+            })
+        except Exception as exc:                    # noqa: BLE001
+            self.send_json(200, {
+                "ok": False, "provider": name,
+                "ms": int((time.time() - t0) * 1000),
+                "error": err_text(exc)[:300],
+            })
+
     def status_payload(self) -> dict:
         now = time.time()
         usage = usage_summary()
@@ -439,7 +554,8 @@ class Handler(BaseHTTPRequestHandler):
             rows.append({
                 "name": p["name"],
                 "enabled": p["enabled"],
-                "has_key": bool(p["api_key"]),
+                "has_key": bool(p["api_key"]) or p["type"] == "opencode",
+                "type": p["type"],
                 "priority": p["priority"],
                 "model": p["model"],
                 "quant": p["quant"],
@@ -512,19 +628,54 @@ class Handler(BaseHTTPRequestHandler):
         else:
             self.handle_nonstream(payload, strategy)
 
+    def _emit_buffered_stream(self, p: dict, data: dict, warn: str) -> None:
+        """把一次性结果伪装成 SSE 流（opencode 上游没有真流式）。"""
+        try:
+            text = str(data["choices"][0]["message"]["content"] or "")
+        except Exception:                          # noqa: BLE001
+            text = ""
+        model = data.get("model") or p["model"]
+        cid = data.get("id") or f"chatcmpl-{int(time.time())}"
+
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("X-Accel-Buffering", "no")
+        self.send_header("X-Gateway-Provider", p["name"])
+        self.send_header("X-Gateway-Stream", "buffered")
+        if warn:
+            self.send_header("X-Gateway-Warning", warn)
+        self.send_header("Transfer-Encoding", "chunked")
+        self.end_headers()
+
+        try:
+            step = max(1, len(text) // 4) if text else 1
+            for i in range(0, len(text), step):
+                ev = {"id": cid, "object": "chat.completion.chunk", "model": model,
+                      "choices": [{"index": 0,
+                                   "delta": {"content": text[i:i + step]}}]}
+                self._chunk(f"data: {json.dumps(ev, ensure_ascii=False)}\n\n".encode())
+            tail = {"id": cid, "object": "chat.completion.chunk", "model": model,
+                    "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+                    "usage": data.get("usage")}
+            self._chunk(f"data: {json.dumps(tail, ensure_ascii=False)}\n\n".encode())
+            self._chunk(b"data: [DONE]\n\n")
+        except (BrokenPipeError, ConnectionResetError):
+            return
+        finally:
+            try:
+                self.wfile.write(b"0\r\n\r\n")
+                self.wfile.flush()
+            except Exception:                      # noqa: BLE001
+                pass
+
     def handle_nonstream(self, payload: dict, strategy: str) -> None:
         tried, last = [], None
         for p in candidates(strategy):
             tried.append(p["name"])
             t0 = time.time()
             try:
-                resp = open_upstream(p, payload, False)
-                try:
-                    raw = resp.read()
-                finally:
-                    resp.close()
-                data = json.loads(raw.decode("utf-8", "ignore"))
-                warn = check_model(p, data)
+                data, warn = call_provider(p, payload)
                 u = data.get("usage") or {}
                 tin = int(u.get("prompt_tokens") or 0)
                 tout = int(u.get("completion_tokens") or 0)
@@ -552,6 +703,28 @@ class Handler(BaseHTTPRequestHandler):
         for p in candidates(strategy):
             tried.append(p["name"])
             t0 = time.time()
+
+            # opencode 上游没有流式：先阻塞拿到结果，再分块吐给客户端
+            if p["type"] == "opencode":
+                try:
+                    data, warn = call_provider(p, payload)
+                except Exception as exc:           # noqa: BLE001
+                    msg = err_text(exc)
+                    mark_fail(p, ProviderError(msg))
+                    record(p["name"], p["model"], 0, 0, 0.0, False,
+                           int((time.time() - t0) * 1000), msg)
+                    last = msg
+                    continue
+                self._emit_buffered_stream(p, data, warn)
+                u = data.get("usage") or {}
+                tin = int(u.get("prompt_tokens") or 0)
+                tout = int(u.get("completion_tokens") or 0)
+                record(p["name"], p["model"], tin, tout,
+                       cost_of(p, tin, tout), True,
+                       int((time.time() - t0) * 1000), warn)
+                mark_ok(p)
+                return
+
             try:
                 resp = open_upstream(p, payload, True)
             except Exception as exc:               # noqa: BLE001
@@ -729,8 +902,11 @@ async function load(){
       const btn = p.enabled
         ? `<button onclick="tog('${p.name}',false)">停用</button>`
         : `<button onclick="tog('${p.name}',true)">启用</button>`;
+      const btns = btn + ` <button onclick="probe('${p.name}')">自检</button>`;
+      const typeTag = p.type === 'opencode'
+        ? ' <span class="tag d">opencode</span>' : '';
       return `<tr>
-        <td><span class="nm">${p.name}</span><div class="sub">${p.note||''}</div></td>
+        <td><span class="nm">${p.name}</span>${typeTag}<div class="sub">${p.note||''}</div></td>
         <td><span class="tag ${cls}">${st}</span></td>
         <td class="mono">${p.model}</td>
         <td>${p.quant}</td>
@@ -740,7 +916,7 @@ async function load(){
         <td>${p.requests_24h}</td>
         <td>${t.toLocaleString()}</td>
         <td class="mono">$${p.cost_24h.toFixed(4)}</td>
-        <td>${btn}</td>
+        <td>${btns}</td>
         <td><span class="err" title="${(p.last_error||'').replace(/"/g,'&quot;')}">${p.last_error||'-'}</span></td>
       </tr>`;
     }).join('');
@@ -764,6 +940,22 @@ async function tog(name, enabled){
     body: JSON.stringify({name, enabled})});
   const d = await r.json();
   if(!d.ok) document.getElementById('msg').textContent = '操作失败：' + d.error;
+  load();
+}
+
+async function probe(name){
+  const el = document.getElementById('msg');
+  el.textContent = '正在自检 ' + name + ' …';
+  try{
+    const r = await fetch('/admin/api/probe', {method:'POST', headers:H(),
+      body: JSON.stringify({name})});
+    const d = await r.json();
+    if(d.ok){
+      el.textContent = '[通] ' + name + '  ' + d.ms + 'ms  ' + (d.sample || '').slice(0, 80);
+    } else {
+      el.textContent = '[失败] ' + name + '  ' + (d.ms || 0) + 'ms  ' + (d.error || '');
+    }
+  }catch(e){ el.textContent = '自检请求失败：' + e; }
   load();
 }
 
