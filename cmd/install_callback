@@ -13,6 +13,12 @@ if [ ! -f "$CFG" ]; then
     fi
 fi
 
+# 1b) providers.d/：新增上游直接往里丢 json，不用改主配置
+mkdir -p "$TRIM_PKGETC/providers.d" 2>/dev/null
+if [ ! -f "$TRIM_PKGETC/providers.d/README.md" ] && [ -f "$TRIM_APPDEST/providers.d/README.md" ]; then
+    cp "$TRIM_APPDEST/providers.d/README.md" "$TRIM_PKGETC/providers.d/README.md" 2>/dev/null
+fi
+
 # 2) 生成 run.sh（含密钥，700）
 . "$TRIM_APPDEST/service.sh"
 if ! write_run >>"$LOG" 2>&1; then
