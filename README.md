@@ -60,6 +60,8 @@
 ├── ICON.PNG  ICON_256.PNG       # 包图标 64 / 256
 ├── app/
 │   ├── gateway.py               # 网关本体（单文件，零依赖）
+│   ├── opencode_upstream.py     # type=opencode 上游：驱动本地 opencode serve
+│   ├── opencode-serve.sh        # 起 OpenCode server 的辅助脚本
 │   ├── providers.json           # 上游池默认模板（免费优先，付费默认关闭）
 │   ├── providers.d/README.md    # 新增上游的模板与字段说明
 │   ├── service.sh               # 生成 run.sh + 启停控制
@@ -287,8 +289,61 @@ OpenCode 支持自定义 OpenAI 兼容 provider，把网关当成一个 provider
 然后面板点「重载配置」即可。规则：同名 `name` 覆盖主配置里的那一条，其余按 `priority` 参与排序；
 某个文件解析失败只跳过它自己，不影响其他。
 
-### 想用付费上游
+### 把 OpenCode 的免费档接进来（type: "opencode"）
 
+OpenCode 的免费 DeepSeek **不能直接当 API 调**（外部请求返回 `403 FreeTierError`），
+但它自带一个**官方文档化**的无头 server，网关可以驱动它——请求真的从 OpenCode 内部发出，不伪造任何东西。
+
+**前提**：NAS 上装了 Node.js 和 OpenCode。
+
+```bash
+npm install -g opencode-ai
+
+# 建议在一个空目录里跑，别让它碰你的文件
+cd /vol1/@appdata/deepseek-gateway
+./opencode-serve.sh          # 等价于 opencode serve --port 4096 --hostname 127.0.0.1
+```
+
+**然后启用上游**（`providers.json` 里已经有这条，默认 `enabled: false`）：
+
+```json
+{
+  "name": "opencode-free",
+  "type": "opencode",
+  "enabled": true,
+  "priority": 5,
+  "base_url": "http://127.0.0.1:4096",
+  "model": "deepseek-v4.1-flash-free",
+  "opencode_provider": "opencode"
+}
+```
+
+回面板点「重载配置」，再点这一行的「**自检**」——通了会显示返回的样例文本。
+
+| 字段 | 说明 |
+|---|---|
+| `type` | `"opencode"` 才会走这条路；默认 `"http"` |
+| `base_url` | `opencode serve` 的地址 |
+| `model` | `deepseek-v4.1-flash-free`（免费档） |
+| `opencode_provider` | 模型所属 provider，默认 `opencode` |
+| `opencode_agent` | 可选，指定 agent（如只读的 `plan`），默认用 OpenCode 默认 agent |
+| `opencode_tools` | 可选，传给 OpenCode 的 `tools` 字段，用来收紧工具权限 |
+| `opencode_extra` | 可选，原样并入 `/session/{id}/message` 请求体 |
+
+**必须知道的代价**（这不是 bug，是这条路的本质）：
+
+| 问题 | 说明 |
+|---|---|
+| 慢 | 每次请求跑一遍 Agent 循环，几秒到几十秒；真 API 是毫秒级 |
+| 无真流式 | 网关只能「缓冲后分块」发给你，响应头会带 `X-Gateway-Stream: buffered` |
+| 会话即弃 | 每个请求建一个会话、用完删掉，所以**没有多轮上下文缓存**（上下文由客户端每次全量传） |
+| 200K / 32K | 免费档上下文和输出上限，付费档才是 1M / 384K |
+| 会动工具 | 它是编码 Agent，理论上可能尝试读文件/跑命令。所以务必让它在**空目录**里跑 |
+| 随时失效 | 限时活动，无公布截止日；上一代 `deepseek-v4-flash-free` 就是这么下架的 |
+
+挂了不会影响其它上游：网关会冷却它、自动切下一家，面板上点「停用」即可。
+
+### 想用付费上游
 把对应条目的 `enabled` 改 `true`，或直接在面板上点「启用」。
 
 ⚠️ **开之前先核对单价**：`price_in/price_out` 是我写死的估算值，会过期；真实账单以各平台控制台为准。
