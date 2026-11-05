@@ -10,6 +10,11 @@ on:
 permissions:
   contents: write
 
+# 同一分支上只保留最新一次运行：连续提交时自动取消排队/运行中的旧任务
+concurrency:
+  group: build-fpk-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build:
     name: 测试并打包 .fpk
