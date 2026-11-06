@@ -1063,8 +1063,11 @@ class Handler(BaseHTTPRequestHandler):
                 return
             self.send_json(200, tokens_payload())
         elif path == "/v1/models":
-            if not authorized(self):
-                self.send_json(401, {"error": "unauthorized"})
+            # 和 /v1/chat/completions 用同一套鉴权：主口令 或 任意启用的访问令牌
+            ok_m, _tok, reason = auth_v1(self)
+            if not ok_m:
+                self.send_json(401, {"error": {"message": reason,
+                                               "type": "unauthorized"}})
                 return
             seen, data = set(), []
             for p in PROVIDERS:
