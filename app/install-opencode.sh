@@ -14,14 +14,34 @@ fi
 EXTRA="/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin:/opt/bin:/snap/bin"
 export PATH="$DATA_DIR/node/bin:$DATA_DIR/npm/bin:$EXTRA:${PATH:-}"
 
+# ── 关键：把 npm 的 HOME / 缓存 / 日志 / 全局目录全部关进应用数据目录 ──
+# 否则 npm 会往 /home/<appuser>/.npm 写日志，而那个目录通常不可写，
+# 报 "The operation was rejected by your operating system"。
+export HOME="$DATA_DIR/home"
+export npm_config_cache="$DATA_DIR/npm-cache"
+export npm_config_logs_dir="$DATA_DIR/npm-cache/_logs"
+export npm_config_prefix="$DATA_DIR/npm"
+export npm_config_fund=false
+export npm_config_audit=false
+export XDG_CACHE_HOME="$DATA_DIR/npm-cache"
+export XDG_CONFIG_HOME="$DATA_DIR/home/.config"
+export XDG_DATA_HOME="$DATA_DIR/home/.local/share"
+mkdir -p "$HOME" "$npm_config_cache" "$npm_config_logs_dir" \
+         "$DATA_DIR/npm" "$XDG_CONFIG_HOME" "$XDG_DATA_HOME" 2>/dev/null || {
+    echo "无法创建目录：$DATA_DIR（检查应用数据目录权限）"
+    exit 1
+}
+
+echo "HOME        = $HOME"
+echo "npm 缓存     = $npm_config_cache"
+echo "npm 全局前缀  = $npm_config_prefix"
+
 ARCH="$(uname -m)"
 case "$ARCH" in
     x86_64|amd64)   NARCH=x64 ;;
     aarch64|arm64)  NARCH=arm64 ;;
     *) echo "不支持的架构：$ARCH"; exit 1 ;;
 esac
-
-mkdir -p "$DATA_DIR/node" "$DATA_DIR/npm" || exit 1
 
 # ── 1) 找 Node：系统有就绝不下载 ──
 NODE_BIN="$(command -v node 2>/dev/null || true)"
@@ -58,15 +78,17 @@ else
 fi
 
 # ── 2) opencode ──
-echo "安装 opencode-ai 到 $DATA_DIR/npm …"
-if ! "$NPM_BIN" install -g --prefix "$DATA_DIR/npm" opencode-ai; then
-    echo "npm 安装失败（检查网络 / npm 源；飞牛上可先 npm config get registry）"
+echo "安装 opencode-ai 到 $npm_config_prefix …"
+if ! "$NPM_BIN" install -g --prefix "$npm_config_prefix" \
+        --no-fund --no-audit --loglevel=error opencode-ai; then
+    echo "npm 安装失败。常见原因："
+    echo "  1) 网络 / npm 源：npm config get registry（可设成 https://registry.npmmirror.com）"
+    echo "  2) 权限：确认 $DATA_DIR 对当前用户可写"
     exit 1
 fi
 
 OC_BIN="$DATA_DIR/npm/bin/opencode"
 if [ ! -x "$OC_BIN" ]; then
-    # 有些 npm 版本把 bin 放在 lib/node_modules 下
     ALT="$DATA_DIR/npm/lib/node_modules/opencode-ai/bin/opencode"
     if [ -f "$ALT" ]; then
         mkdir -p "$DATA_DIR/npm/bin"
