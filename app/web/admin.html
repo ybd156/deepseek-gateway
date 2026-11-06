@@ -14,6 +14,7 @@
       <a data-tab="overview">概览</a>
       <a data-tab="providers">上游</a>
       <a data-tab="tokens">访问令牌</a>
+      <a data-tab="models">模型</a>
       <a data-tab="stats">统计</a>
       <a data-tab="logs">日志</a>
       <a data-tab="settings">设置</a>
@@ -124,6 +125,131 @@
       </div>
     </section>
 
+    <!-- ========== 模型 ========== -->
+    <section class="tab" id="tab-models">
+      <header class="pagehead">
+        <h1>模型与档位</h1>
+        <p>每个模型的上下文长度、是否支持图片、支持哪些思考档位。可逐条覆盖。</p>
+      </header>
+
+      <div class="row" style="margin-top:0">
+        <button onclick="loadCaps()">刷新</button>
+        <span class="msg" id="msgModels"></span>
+        <span class="sub" id="capsSummary"></span>
+      </div>
+
+      <div class="card" style="margin-bottom:14px">
+        <div class="f2">
+          <div class="field" style="margin-bottom:0"><label>默认思考档位</label>
+            <select id="effDefault" onchange="saveEffort()">
+              <option value="max">max（最高档）</option>
+              <option value="high">high</option>
+              <option value="medium">medium</option>
+              <option value="low">low</option>
+              <option value="off">off（不要思考）</option>
+            </select>
+            <div class="hint">模型没单独配置时用它；不支持就落到不高于它的最高支持档。</div></div>
+          <div class="field" style="margin-bottom:0"><label>网关优先 / 客户端优先</label>
+            <select id="effMode" onchange="saveEffort()">
+              <option value="client">客户端优先：没传档位时才补网关档位</option>
+              <option value="force">网关优先：一律改写成网关档位，但尊重客户端 off</option>
+              <option value="force+">网关优先：连客户端 off 也覆盖成开启</option>
+            </select></div>
+        </div>
+        <div class="hint" id="effWarn" style="margin-top:8px"></div>
+      </div>
+
+      <div class="tablewrap">
+        <table class="wide">
+          <thead><tr>
+            <th>模型</th><th>上游</th><th>上下文</th><th>图片</th>
+            <th>支持的档位</th><th>网关档位</th>
+          </tr></thead>
+          <tbody id="capsBody"></tbody>
+        </table>
+      </div>
+      <div class="hint" style="margin-top:8px">
+        上下文按内置能力表推断；「未知」的模型请手填，否则按 32K 保守处理。
+      </div>
+    </section>
+
+    <!-- ========== 高级 ========== -->
+    <section class="tab" id="tab-advanced">
+      <header class="pagehead">
+        <h1>高级</h1>
+        <p>超时、出站身份、模型准入、提示词、历史裁剪。改完点保存。</p>
+      </header>
+
+      <h2>超时</h2>
+      <div class="card">
+        <div class="f2" style="grid-template-columns:repeat(3,1fr)">
+          <div class="field"><label>短请求超时（秒）</label>
+            <input id="advShort" type="number" min="5" max="3600">
+            <div class="hint">探测模型、列模型这类</div></div>
+          <div class="field"><label>聊天首字节超时（秒）</label>
+            <input id="advFirst" type="number" min="5" max="3600">
+            <div class="hint">等第一个字节最多多久</div></div>
+          <div class="field"><label>流空闲超时（秒）</label>
+            <input id="advIdle" type="number" min="5" max="3600">
+            <div class="hint">流式两段之间最长间隔</div></div>
+        </div>
+        <div class="field" style="margin-bottom:0"><label>出站 User-Agent</label>
+          <input id="advUA" placeholder="留空 = 不设置（用 urllib 默认）">
+          <div class="hint">有些上游会按 UA 识别客户端，需要时改这里。</div></div>
+      </div>
+
+      <h2>模型准入</h2>
+      <div class="card">
+        <div class="f2">
+          <div class="field"><label>黑名单</label>
+            <input id="advBlack" placeholder="deepseek-pro, cn:legacy-model">
+            <div class="hint">逗号分隔。可加 cn: / global: 前缀限定区域。命中直接拒绝。</div></div>
+          <div class="field"><label>白名单</label>
+            <input id="advWhite" placeholder="glm-5.2, gpt-5.4">
+            <div class="hint">非空时只放行名单内；留空 = 全部放行。</div></div>
+        </div>
+        <div class="field" style="margin-bottom:0"><label>模型映射</label>
+          <input id="advMap" placeholder="claude-opus-4=glm-5.2, gpt-5=global:gpt-5.4">
+          <div class="hint">「客户端点名=真实模型名」。响应仍回显客户端原名。</div></div>
+      </div>
+
+      <h2>提示词与历史</h2>
+      <div class="card">
+        <div class="f2">
+          <div class="field"><label>系统提示词模式</label>
+            <select id="advSysMode">
+              <option value="passthrough">passthrough — 透传客户端原始 system</option>
+              <option value="default">default — 用下面的提示词替换</option>
+              <option value="append">append — 在客户端后面追加</option>
+              <option value="prepend">prepend — 放在客户端前面</option>
+              <option value="drop">drop — 丢掉客户端 system</option>
+            </select></div>
+          <div class="field"><label>提示词文件路径</label>
+            <input id="advSysFile" placeholder="留空 = 用下面直接填的文本">
+            <div class="hint">填了就以文件内容为准，改文件即生效。</div></div>
+        </div>
+        <div class="field"><label>默认系统提示词</label>
+          <textarea id="advSysText" rows="4" placeholder="留空 = 不加"
+            style="width:100%;font-family:inherit;font-size:13px;padding:8px 10px;
+                   border:1px solid #d5dbe5;border-radius:8px;resize:vertical"></textarea></div>
+        <div class="field" style="margin-bottom:0"><label>只保留最近 N 轮对话</label>
+          <input id="advRounds" type="number" min="0" max="500" style="max-width:160px">
+          <div class="hint">出站前丢掉更早的对话，system 全留。一轮 = 一条 user 及其后内容。0 = 关闭。</div></div>
+      </div>
+
+      <h2>日志</h2>
+      <div class="card">
+        <label class="chk"><input type="checkbox" id="advLogSource">
+          记录调用来源（客户端 IP / User-Agent）</label>
+        <div class="hint">开启后「日志」页会显示每次调用来自哪个 IP、什么客户端。</div>
+      </div>
+
+      <div class="row">
+        <button class="pri" onclick="saveAdvanced()">保存高级设置</button>
+        <span class="msg" id="msgAdvanced"></span>
+      </div>
+    </section>
+
     <!-- ========== 统计 ========== -->
     <section class="tab" id="tab-stats">
       <header class="pagehead">
@@ -169,7 +295,9 @@
         <p>每次调用的记录，以及服务本身的输出。</p>
       </header>
 
-      <h2>调用日志</h2>
+      <div class="stats" id="logCards"></div>
+
+      <h2>请求事件</h2>
       <div class="row" style="margin-top:0">
         <button onclick="loadUsage()">刷新</button>
         <label class="chk"><input type="checkbox" id="autoLog" onchange="toggleAuto()"> 自动刷新（5 秒）</label>
@@ -178,15 +306,36 @@
           <option value="300" selected>最近 300 条</option>
           <option value="1000">最近 1000 条</option>
         </select>
+        <select id="logFilter" onchange="renderLog()" style="max-width:160px">
+          <option value="all">全部结果</option>
+          <option value="ok">只看成功</option>
+          <option value="fail">只看失败</option>
+        </select>
+        <input id="logSearch" placeholder="搜 IP / UA / 模型 / 请求 ID" oninput="renderLog()"
+          style="max-width:250px">
         <span class="msg" id="logMsg"></span>
       </div>
       <div class="tablewrap">
-        <table class="wide">
+        <table class="wide" style="min-width:1180px">
           <thead><tr>
-            <th>时间</th><th>上游</th><th>模型</th><th>令牌</th><th>结果</th>
-            <th>输入/输出</th><th>花费</th><th>耗时</th><th>错误</th>
+            <th>时间</th><th>结果</th><th>模型</th><th>令牌</th><th>档位</th>
+            <th>请求</th><th>首字</th><th>总耗时</th><th>速度</th>
+            <th>Token</th><th>缓存</th><th>来源 IP</th><th>客户端</th><th>请求 ID</th>
           </tr></thead>
           <tbody id="logBody"></tbody>
+        </table>
+      </div>
+
+      <h2>错误汇总</h2>
+      <div class="row" style="margin-top:0">
+        <button onclick="loadErrors()">刷新</button>
+        <span class="sub" id="errSummary"></span>
+      </div>
+      <div class="tablewrap">
+        <table style="min-width:900px">
+          <thead><tr><th>上游</th><th>类型</th><th>上游码</th><th>次数</th>
+            <th>最近</th><th>样本</th></tr></thead>
+          <tbody id="errBody"></tbody>
         </table>
       </div>
 
