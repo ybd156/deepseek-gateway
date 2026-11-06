@@ -256,6 +256,31 @@
       "quant": "-",
       "note": "付费：官方兜底；闲时半价、缓存命中 $0.003；1M 上下文",
       "console_url": "https://platform.deepseek.com/api_keys"
+    },
+    {
+      "name": "opencode-zen",
+      "type": "http",
+      "protocol": "openai",
+      "enabled": false,
+      "priority": 30,
+      "base_url": "https://opencode.ai/inference/openai/v1",
+      "model": "deepseek-v4.1-flash",
+      "models": [
+        "deepseek-v4.1-flash",
+        "deepseek-v4-pro",
+        "glm-5.3-flash",
+        "qwen3.8-flash",
+        "kimi-k2.5",
+        "minimax-m3"
+      ],
+      "api_key_env": "OPENCODE_API_KEY",
+      "free_only": false,
+      "free_quota_tokens": 0,
+      "price_in": 0.3,
+      "price_out": 1.2,
+      "quant": "-",
+      "console_url": "https://opencode.ai/console",
+      "note": "OpenCode Console 付费档：充值后用 Console API Key 走标准 OpenAI 接口。免费模型只在 OpenCode 客户端内有效，API 需付费模型。"
     }
   ]
 }
