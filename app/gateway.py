@@ -2765,6 +2765,12 @@ NAV
     <!-- ===== OpenCode ===== -->
     <div class="sect" data-sect="opencode">
       <h2>OpenCode 运行时（给 type=opencode 的上游用）</h2>
+      <div class="hint" style="margin:-2px 0 10px;line-height:1.7">
+        免费模型官方限定「<b>只在 OpenCode 客户端内使用</b>」，API/CLI 调用会被限流并返回
+        <span class="mono">Free usage limit reached</span>（见 issue #59387）。<br>
+        另外 <b>v1（0.x/1.x）已不支持免费模型</b>，要用免费模型必须装 v2（<span class="mono">opencode2</span>）。
+        长期稳定使用请配一个有 Key 的上游。
+      </div>
       <div class="card">
         <div class="phd"><span class="nm">opencode serve</span>
           <span><span id="ocState" class="tag d">…</span></span></div>
@@ -2913,7 +2919,8 @@ function provCard(p, i){
        + '<select data-f="opencode_mode">'
        + '<option value="server"' + ((p.opencode_mode || 'server') !== 'cli' ? ' selected' : '') + '>服务端 API（serve）</option>'
        + '<option value="cli"' + (p.opencode_mode === 'cli' ? ' selected' : '') + '>命令行（run）</option>'
-       + '</select><div class="hint">cli 走客户端本体，可能绕过免费池限制</div></div>';
+       + '</select><div class="hint">cli 走客户端本体。注意：opencode 免费模型'
+       + '官方限定「只在 OpenCode 内使用」，API/CLI 会被限流（issue #59387）</div></div>';
   } else {
     h += '<div class="field"><label>协议</label>'
        + '<select data-f="protocol">'
