@@ -225,6 +225,20 @@ SOCKS5 由标准库自实现隧道，不依赖 PySocks。填完点旁边的「**
 **免密钥上游**：勾选卡片里的「免密钥」后，即使没有 Key 也会参与路由——本地 Ollama、vLLM、
 LM Studio 这类不需要鉴权的服务用这个。面板上密钥来源会显示为「免密钥」。
 
+### 上游协议：不只 OpenAI 兼容
+
+卡片里的「协议」决定网关用哪种接口跟这个上游说话。**客户端那一侧永远是 OpenAI 形状**，转换在网关内部做。
+
+| 协议 | 请求 | 鉴权头 | 响应字段 |
+|---|---|---|---|
+| OpenAI Chat Completions（默认） | `POST {base}/chat/completions` | `Authorization: Bearer` | `choices[0].message.content` |
+| OpenAI Responses | `POST {base}/responses` | `Authorization: Bearer` | `output[].content[].text` |
+| Anthropic Messages | `POST {base}/v1/messages` | `x-api-key` + `anthropic-version` | `content[].text` |
+| Google Gemini | `POST {base}/models/{model}:generateContent` | `x-goog-api-key` | `candidates[].content.parts[].text` |
+
+后三种没有真流式：网关先拿到完整结果，再按 SSE 分块吐给客户端（`X-Gateway-Stream: buffered`），
+客户端无感。状态表里每个上游后面会标出它用的协议。
+
 ### 不只 DeepSeek：一个上游挂多个模型
 
 每个上游除了「默认模型」，还有「**更多模型**」一行（逗号分隔）。网关按客户端请求里的 `model` 路由：
@@ -359,6 +373,7 @@ OpenCode 支持自定义 OpenAI 兼容 provider，把网关当成一个 provider
 | `model_contains` | 校验响应里的 `model` 字段，防上游静默换模型 |
 | `strict_model` | `true` = 校验不过就换下一家；`false` = 只加个警告头 |
 | `extra` | 原样并入请求体（OpenRouter 用来钉死某个 provider） |
+| `protocol` | 用哪种接口跟上游说话：空 = OpenAI Chat Completions；`responses` / `anthropic` / `gemini` 见下 |
 | `models` | 该上游额外支持的模型列表。客户端请求里点哪个名就用哪个 |
 | `price_in/price_out` | USD / 百万 tokens，用于成本估算和 `cheapest` 排序 |
 | `free_only` | `true` = 计入免费额度硬卡；额度用尽自动停用，**绝不转付费** |
