@@ -1094,13 +1094,15 @@ async function loadCaps() {
         + '</td>'
         + '<td><input class="capin" type="number" value="' + (m.context || '')
         + '" data-m="' + esc(m.model) + '" data-k="context"></td>'
+        + '<td><input class="capin" type="number" value="' + (m.max_output || '')
+        + '" data-m="' + esc(m.model) + '" data-k="max_output"></td>'
         + '<td><input type="checkbox"' + (m.vision ? ' checked' : '')
         + ' data-m="' + esc(m.model) + '" data-k="vision"></td>'
         + '<td class="sub">' + esc(tiers) + '</td>'
         + '<td><select class="capin" data-m="' + esc(m.model) + '" data-k="effort">'
         + '<option value="">跟随默认</option>' + opts + '</select></td>'
         + '</tr>';
-    }).join('') || '<tr><td colspan="7" class="sub">还没有模型</td></tr>';
+    }).join('') || '<tr><td colspan="8" class="sub">还没有模型</td></tr>';
   } catch (e) { msg('Models', '读取失败：' + e.message); }
 }
 
@@ -1111,10 +1113,12 @@ function collectCaps() {
     out[m] = out[m] || {};
     if (k === 'vision') out[m].vision = el.checked;
     else if (k === 'context') out[m].context = Number(el.value || 0);
+    else if (k === 'max_output') out[m].max_output = Number(el.value || 0);
     else out[m].effort = el.value;
   });
   Object.keys(out).forEach(m => {
     if (out[m].context === 0) delete out[m].context;
+    if (out[m].max_output === 0) delete out[m].max_output;
     if (!out[m].effort) delete out[m].effort;
     if (!Object.keys(out[m]).length) delete out[m];
   });
