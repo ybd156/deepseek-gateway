@@ -200,7 +200,7 @@ def config_snapshot() -> dict:
         src = ("main" if os.path.abspath(path) == os.path.abspath(CONFIG_PATH)
                else os.path.basename(path))
         for it in data.get("providers") or []:
-            item = {k: it.get(k) for k in EDITABLE_FIELDS if k in it}
+            item = dict(it)                 # 保留全部原始字段（extra / opencode_* 等）
             item["_source"] = src
             r = resolved.get(str(it.get("name", "")))
             item["_has_key"] = bool(r and r["api_key"])
@@ -242,7 +242,7 @@ def config_save(body: dict) -> dict:
         name = str(raw.get("name") or "").strip()
         if not name:
             raise ValueError("每个上游都必须有 name")
-        item = {k: raw[k] for k in EDITABLE_FIELDS if k in raw}
+        item = {k: v for k, v in raw.items() if not str(k).startswith("_")}
         item["name"] = name
         item.setdefault("base_url", "")
         item.setdefault("model", "")
@@ -1380,7 +1380,8 @@ function provCard(p, i){
   const link = p.console_url
     ? `<a href="${esc(p.console_url)}" target="_blank" rel="noopener">去获取 Key ↗</a>` : '';
   return `<div class="prov" data-i="${i}">
-    <div class="hd"><span class="nm">${esc(p.name)}</span><span>${link}</span></div>
+    <div class="hd"><input data-f="name" value="${esc(p.name)}" style="font-weight:600;flex:1">
+      <span>${link}</span></div>
     ${fld('启用', `<input type="checkbox" data-f="enabled" ${p.enabled?'checked':''}>`)}
     ${fld('类型', `<select data-f="type">
         <option value="http" ${p.type!=='opencode'?'selected':''}>http（OpenAI 兼容）</option>
@@ -1389,6 +1390,7 @@ function provCard(p, i){
     ${fld('接口', `<input data-f="base_url" value="${esc(p.base_url)}">`)}
     ${fld('模型', `<input data-f="model" value="${esc(p.model)}">`)}
     ${fld('校验串', `<input data-f="model_contains" value="${esc(p.model_contains)}" placeholder="留空 = 不校验">`)}
+    ${fld('严格校验', `<input type="checkbox" data-f="strict_model" ${p.strict_model?'checked':''}>`)}
     ${fld('优先级', `<input type="number" data-f="priority" value="${p.priority||100}">`)}
     ${fld('免费额度', `<input type="checkbox" data-f="free_only" ${p.free_only?'checked':''}>
         <input type="number" data-f="free_quota_tokens" value="${p.free_quota_tokens||0}" placeholder="tokens，0=不限">`)}
