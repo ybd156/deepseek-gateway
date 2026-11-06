@@ -1662,15 +1662,21 @@ _STATUS_BODY = """
   </div>
 
   <h2>接入信息（给客户端用，可直接复制）</h2>
-  <div class="prov" style="max-width:980px">
-    <div class="fld"><label>直连（推荐）</label><input id="epDirect" readonly></div>
-    <div class="fld"><label>网关路径</label><input id="epGateway" readonly></div>
+  <div class="prov" style="max-width:1000px">
+    <div class="fld"><label>直连（推荐）</label><input id="epDirect" readonly>
+      <button onclick="copyEp('epDirect','直连地址')">复制</button></div>
+    <div class="fld"><label>本机</label><input id="epLocal" readonly>
+      <button onclick="copyEp('epLocal','本机地址')">复制</button></div>
+    <div class="fld"><label>网关路径</label><input id="epGateway" readonly>
+      <button onclick="copyEp('epGateway','网关地址')">复制</button></div>
     <div class="sub" style="margin:2px 0 8px">
-      ⚠ 外部客户端（Cherry Studio / OpenCode / 脚本）**必须用「直连」那行**；
-      「网关路径」需要飞牛登录态，只有在本机浏览器里打开时才能用。
+      ⚠ 外部客户端（Cherry Studio / OpenCode / 脚本）用「直连」；在 NAS 本机上跑的用「本机」；
+      「网关路径」需要飞牛登录态，只在本机浏览器里打开时有效。
     </div>
-    <div class="fld"><label>模型名</label><input id="epModels" readonly placeholder="加载中…"></div>
-    <div class="fld"><label>示例</label><input id="epCurl" readonly></div>
+    <div class="fld"><label>模型名</label><input id="epModels" readonly placeholder="加载中…">
+      <button onclick="copyEp('epModels','模型名')">复制</button></div>
+    <div class="fld"><label>示例</label><input id="epCurl" readonly>
+      <button onclick="copyEp('epCurl','curl 示例')">复制</button></div>
   </div>
 
   <div class="row">
@@ -1767,11 +1773,45 @@ async function reloadCfg(){
   catch(e){}
   load();
 }
+function copyEp(id, label){
+  const el = document.getElementById(id);
+  const txt = el ? (el.value || '') : '';
+  if(!txt){ msg('这一行还没有内容'); return; }
+  copyText(txt, label);
+}
+
+function copyText(txt, label){
+  const done = function(){ msg('已复制' + (label ? '：' + label : '')); };
+  const fail = function(){ msg('复制失败，请手动选中输入框复制'); };
+  const fallback = function(){
+    try{
+      const ta = document.createElement('textarea');
+      ta.value = txt;
+      ta.style.position = 'fixed';
+      ta.style.top = '-1000px';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.focus();
+      ta.select();
+      const ok = document.execCommand('copy');
+      document.body.removeChild(ta);
+      if(ok){ done(); } else { fail(); }
+    }catch(e){ fail(); }
+  };
+  if(navigator.clipboard && window.isSecureContext){
+    navigator.clipboard.writeText(txt).then(done).catch(fallback);
+  } else {
+    fallback();
+  }
+}
+
 async function loadEndpoint(port){
   try{
     const host = location.hostname;
-    const direct = 'http://' + host + ':' + (port || 18787) + '/v1';
+    const p = port || 18787;
+    const direct = 'http://' + host + ':' + p + '/v1';
     document.getElementById('epDirect').value = direct;
+    document.getElementById('epLocal').value = 'http://127.0.0.1:' + p + '/v1';
     document.getElementById('epGateway').value = BASE
       ? (location.origin + BASE + '/v1')
       : '（当前就是直连访问，无需网关）';
