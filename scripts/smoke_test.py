@@ -511,6 +511,14 @@ def main() -> int:
             "strategy": "priority", "cooldown_seconds": 5,
             "providers": base_providers})
 
+
+        print("== 24. OpenCode 状态视图 ==")
+        code, _, txt = http("GET", base + "/admin/api/opencode")
+        oc = json.loads(txt)
+        check(code == 200, "状态可读", str(code))
+        for f in ("cli_mode", "needs_server", "needs_login", "ready", "installed"):
+            check(f in oc, "状态含字段 " + f, str(list(oc))[:80])
+
     finally:
         try:
             proc.terminate()
