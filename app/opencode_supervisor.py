@@ -19,6 +19,11 @@ import time
 
 
 class OpenCodeSupervisor:
+    # 应用以专用用户运行时 PATH 往往很干净，显式兜底这些目录
+    EXTRA_BIN_DIRS = ("/usr/local/bin", "/usr/bin", "/bin",
+                      "/usr/local/sbin", "/usr/sbin", "/sbin",
+                      "/opt/bin", "/snap/bin", "/home/linuxbrew/.linuxbrew/bin")
+
     def __init__(self, data_dir: str, get_opts) -> None:
         """get_opts() 返回 dict：bin / port / workspace / autostart / enabled。"""
         self.data_dir = data_dir
@@ -30,6 +35,32 @@ class OpenCodeSupervisor:
         self._lock = threading.Lock()
         self._stop_watch = False
         self.log_path = os.path.join(data_dir, "opencode.log")
+        self._ver_cache: dict[str, str] = {}
+
+    # ── 可执行文件查找 ──
+    @classmethod
+    def which(cls, name: str) -> str:
+        found = shutil.which(name)
+        if found:
+            return found
+        for d in cls.EXTRA_BIN_DIRS:
+            cand = os.path.join(d, name)
+            if os.path.exists(cand) and os.access(cand, os.X_OK):
+                return cand
+        return ""
+
+    def _version(self, exe: str, flag: str = "-v") -> str:
+        key = exe + flag
+        if key in self._ver_cache:
+            return self._ver_cache[key]
+        out = ""
+        try:
+            out = subprocess.run([exe, flag], capture_output=True, text=True,
+                                 timeout=6).stdout.strip().splitlines()[0]
+        except Exception:
+            out = ""
+        self._ver_cache[key] = out
+        return out
 
     # ── 路径与探活 ──
     @property
@@ -43,8 +74,18 @@ class OpenCodeSupervisor:
             return cand
         if os.path.exists(self.private_bin):
             return self.private_bin
-        found = shutil.which("opencode")
-        return found or ""
+        return self.which("opencode")
+
+    def bin_source(self) -> str:
+        opts = self.get_opts() or {}
+        cand = str(opts.get("bin") or "").strip()
+        if cand and os.path.exists(cand):
+            return "手动指定"
+        if os.path.exists(self.private_bin):
+            return "应用内安装"
+        if self.which("opencode"):
+            return "系统"
+        return "无"
 
     def port_open(self) -> bool:
         port = int((self.get_opts() or {}).get("port") or 4096)
@@ -63,11 +104,18 @@ class OpenCodeSupervisor:
     def status(self) -> dict:
         opts = self.get_opts() or {}
         bin_path = self.resolve_bin()
+        node = self.which("node")
+        npm = self.which("npm")
         return {
             "installed": bool(bin_path),
             "bin": bin_path,
+            "bin_source": self.bin_source(),
             "private_bin": self.private_bin,
-            "node": shutil.which("node") or "",
+            "node": node,
+            "node_version": self._version(node) if node else "",
+            "npm": npm,
+            "npm_version": self._version(npm) if npm else "",
+            "system_node": bool(node),
             "running": self.is_running(),
             "pid": self.proc.pid if self.is_running() else None,
             "port": int(opts.get("port") or 4096),
@@ -114,11 +162,22 @@ class OpenCodeSupervisor:
             log = open(self.log_path, "ab")
             log.write(f"\n===== {time.strftime('%Y-%m-%d %H:%M:%S')} 启动 opencode serve =====\n".encode())
             log.flush()
+
+            # opencode 是个 node 脚本（shebang 走 env node），PATH 里必须能找到 node
+            env = dict(os.environ)
+            extra = []
+            node = self.which("node")
+            if node:
+                extra.append(os.path.dirname(node))
+            extra.extend(self.EXTRA_BIN_DIRS)
+            extra.append(os.path.dirname(bin_path))
+            env["PATH"] = ":".join(extra + [env.get("PATH", "")])
+
             try:
                 self.proc = subprocess.Popen(
                     [bin_path, "serve", "--port", port, "--hostname", "127.0.0.1"],
                     cwd=ws, stdout=log, stderr=subprocess.STDOUT,
-                    stdin=subprocess.DEVNULL, start_new_session=True)
+                    stdin=subprocess.DEVNULL, start_new_session=True, env=env)
             except Exception as exc:                # noqa: BLE001
                 self.last_error = f"启动失败：{exc}"
                 return False, self.last_error
