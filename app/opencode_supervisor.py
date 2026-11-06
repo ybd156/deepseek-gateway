@@ -102,6 +102,38 @@ class OpenCodeSupervisor:
     def is_running(self) -> bool:
         return self.proc is not None and self.proc.poll() is None
 
+    def own_logs(self, lines: int = 150) -> str:
+        """opencode 自己写的日志（provider 报错都在这里）。"""
+        dirs = [
+            os.path.join(self.data_dir, "home", ".local", "share", "opencode", "log"),
+            os.path.join(self.data_dir, "home", ".config", "opencode", "log"),
+            os.path.expanduser("~/.local/share/opencode/log"),
+        ]
+        cands = []
+        for d in dirs:
+            try:
+                if not os.path.isdir(d):
+                    continue
+                for fn in os.listdir(d):
+                    if fn.endswith(".log"):
+                        fp = os.path.join(d, fn)
+                        cands.append((os.path.getmtime(fp), fp))
+            except Exception:
+                continue
+        if not cands:
+            return "（没找到 opencode 自己的日志，可能还没写过）"
+        cands.sort(reverse=True)
+        fp = cands[0][1]
+        try:
+            with open(fp, "rb") as fh:
+                fh.seek(0, os.SEEK_END)
+                size = fh.tell()
+                fh.seek(max(0, size - 200 * 1024))
+                text = fh.read().decode("utf-8", "ignore")
+            return "[" + fp + "]" + chr(10) + chr(10).join(text.splitlines()[-lines:])
+        except Exception as exc:                    # noqa: BLE001
+            return f"（读取失败：{exc}）"
+
     def status(self) -> dict:
         opts = self.get_opts() or {}
         bin_path = self.resolve_bin()
@@ -123,6 +155,7 @@ class OpenCodeSupervisor:
             "port_open": self.port_open(),
             "workspace": str(opts.get("workspace") or ""),
             "autostart": bool(opts.get("autostart", True)),
+            "oc_logs": self.own_logs(120),
             "uptime": int(time.time() - self.started_at) if self.is_running() else 0,
             "restarts": self.restarts,
             "last_error": self.last_error,
