@@ -1841,6 +1841,15 @@ class Handler(BaseHTTPRequestHandler):
             keys = str(_body.get("keys") or "")
             if keys == "enter":
                 keys = chr(13)
+            elif keys in ("pick-console", "pick-go"):
+                # 先输入关键词过滤，再回车选中
+                word = "console" if keys == "pick-console" else "go"
+                ok1, m1 = SUPERVISOR.send_login(word)
+                time.sleep(0.6)
+                ok2, m2 = SUPERVISOR.send_login(chr(13))
+                self.send_json(200, {**SUPERVISOR.status(), "ok": ok1 and ok2,
+                                     "message": ("已选择：" + word) if (ok1 and ok2) else (m1 + " / " + m2)})
+                return
             ok_k, msg_k = SUPERVISOR.send_login(keys)
             self.send_json(200, {**SUPERVISOR.status(), "ok": ok_k, "message": msg_k})
             return
@@ -2842,6 +2851,8 @@ NAV
           <input id="ocKeys" placeholder="看到菜单时：直接点「发送回车」选第一项；也可填数字">
           <button onclick="ocSendKeys()">发送</button>
           <button class="pri" onclick="ocSendKeys('enter')">发送回车</button>
+          <button onclick="ocSendKeys('pick-console')">选 OpenCode Console</button>
+          <button onclick="ocSendKeys('pick-go')">选 OpenCode Go</button>
         </div>
         <pre id="ocLogin">（还没有登录输出）</pre>
         <div class="sub" style="margin:10px 0 4px">opencode 自己的日志（provider 报错在这）</div>
