@@ -253,6 +253,18 @@ def main() -> int:
         code, _, _ = http("GET", base + "/admin/api/logs?kind=gateway&limit=30")
         check(code == 200, "网关日志可读", str(code))
 
+        row = (lg.get("rows") or [{}])[0]
+        for f in ("first_byte_ms", "tps", "cache_hit", "cache_rate",
+                  "client_ip", "request_id", "status", "stream"):
+            check(f in row, "日志含字段 " + f, str(list(row))[:80])
+        check(any(r.get("stream") for r in (lg.get("rows") or [])),
+              "流式请求有标记", str([r.get("stream") for r in (lg.get("rows") or [])][:5]))
+
+        code, _, txt = http("GET", base + "/admin/api/errors")
+        er = json.loads(txt)
+        check(code == 200 and er.get("ok") is True, "错误汇总可读", str(code))
+        check("rows" in er and "kinds" in er, "错误汇总结构完整")
+
         print("== 7. 配置读写与单卡保存 ==")
         code, _, txt = http("GET", base + "/admin/api/config")
         cfg = json.loads(txt)
@@ -351,6 +363,98 @@ def main() -> int:
         check(code == 200 and d.get("ok") is True, "探测可用", txt[:80])
         free = [m["id"] for m in d.get("models", []) if m.get("free")]
         check("m-free:free" in free, "识别出免费模型", str(free))
+
+
+        print("== 14. 模型能力表 ==")
+        code, _, txt = http("GET", base + "/admin/api/caps")
+        cp = json.loads(txt)
+        check(code == 200 and cp.get("ok") is True, "能力接口可读", str(code))
+        row = next((m for m in cp.get("models", []) if m["model"] == MODEL), {})
+        check(row.get("context", 0) > 0, "识别出上下文长度", str(row.get("context")))
+        check(row.get("known") is True, "内置表命中", str(row.get("known")))
+
+        print("== 15. 模型黑名单 ==")
+        http("POST", base + "/admin/api/config", {"model_blacklist": MODEL})
+        code, _, txt = http("POST", base + "/v1/chat/completions",
+                            {"model": MODEL,
+                             "messages": [{"role": "user", "content": "hi"}]},
+                            headers={"Authorization": "Bearer " + key})
+        msg1 = ""
+        try:
+            msg1 = str(json.loads(txt)["error"]["message"])
+        except Exception:
+            pass
+        check(code == 400 and "黑名单" in msg1, "黑名单拦住了", str(code) + " " + msg1[:60])
+        http("POST", base + "/admin/api/config", {"model_blacklist": ""})
+
+        print("== 16. 模型白名单 ==")
+        http("POST", base + "/admin/api/config", {"model_whitelist": "别的模型"})
+        code, _, txt = http("POST", base + "/v1/chat/completions",
+                            {"model": MODEL,
+                             "messages": [{"role": "user", "content": "hi"}]},
+                            headers={"Authorization": "Bearer " + key})
+        check(code == 400, "白名单外被拒", str(code))
+        http("POST", base + "/admin/api/config", {"model_whitelist": ""})
+
+        print("== 17. 模型映射（回显原名）==")
+        http("POST", base + "/admin/api/config",
+             {"model_mapping": MODEL + "=上游真名"})
+        code, _, txt = http("POST", base + "/v1/chat/completions",
+                            {"model": MODEL,
+                             "messages": [{"role": "user", "content": "m"}]},
+                            headers={"Authorization": "Bearer " + key})
+        body = json.loads(txt) if code == 200 else {}
+        check(code == 200, "映射后仍成功", str(code))
+        check(body.get("model") == MODEL, "响应回显客户端原名",
+              str(body.get("model")))
+        http("POST", base + "/admin/api/config", {"model_mapping": ""})
+
+        print("== 18. 提示词模式 default ==")
+        http("POST", base + "/admin/api/config",
+             {"system_mode": "default", "system_text": "网关注入的系统提示"})
+        code, _, txt = http("POST", base + "/v1/chat/completions",
+                            {"messages": [{"role": "system", "content": "客户端的"},
+                                          {"role": "user", "content": "s"}]},
+                            headers={"Authorization": "Bearer " + key})
+        check(code == 200, "注入后成功", str(code))
+        http("POST", base + "/admin/api/config",
+             {"system_mode": "passthrough", "system_text": ""})
+
+        print("== 19. 只保留最近 N 轮 ==")
+        http("POST", base + "/admin/api/config", {"keep_rounds": 1})
+        long_msgs = []
+        for i in range(6):
+            long_msgs.append({"role": "user", "content": "第%d轮" % i})
+            long_msgs.append({"role": "assistant", "content": "答%d" % i})
+        long_msgs.append({"role": "user", "content": "最后一问"})
+        code, _, txt = http("POST", base + "/v1/chat/completions",
+                            {"messages": long_msgs},
+                            headers={"Authorization": "Bearer " + key})
+        body = json.loads(txt) if code == 200 else {}
+        content = ""
+        try:
+            content = str(body["choices"][0]["message"]["content"])
+        except Exception:
+            pass
+        check(code == 200 and "最后一问" in content, "裁剪后仍成功", content[:60])
+        check("第0轮" not in content, "老对话已被丢掉", content[:60])
+        http("POST", base + "/admin/api/config", {"keep_rounds": 0})
+
+        print("== 20. 图片拒绝（模型不支持视觉）==")
+        code, _, txt = http("POST", base + "/v1/chat/completions",
+                            {"model": MODEL, "messages": [
+                                {"role": "user", "content": [
+                                    {"type": "text", "text": "这是什么"},
+                                    {"type": "image_url",
+                                     "image_url": {"url": "data:image/png;base64,AA"}}]}]},
+                            headers={"Authorization": "Bearer " + key})
+        msg2 = ""
+        try:
+            msg2 = str(json.loads(txt)["error"]["message"])
+        except Exception:
+            pass
+        check(code == 400 and "图片" in msg2, "不支持视觉时明确拒绝",
+              str(code) + " " + msg2[:60])
 
     finally:
         try:
