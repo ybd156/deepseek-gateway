@@ -164,6 +164,63 @@ class OpenCodeClient:
                 "模型 %s 不在 OpenCode 的可用列表里。当前可用：%s"
                 % (self.model_id, ", ".join(models[:8])))
 
+    # ---- 分步探测：卡住时也要把服务端状态挖出来 ----
+    def probe_message(self, prompt: str = "回复两个字：OK", timeout: float = 20) -> dict:
+        out: dict = {"steps": []}
+        sid = ""
+        try:
+            try:
+                sess = self._req("POST", "/session", {"title": "probe"})
+                sid = str(sess.get("id") or "")
+            except Exception as exc:                # noqa: BLE001
+                out["steps"].append({"step": "create_session", "ok": False,
+                                     "error": str(exc)[:300]})
+                return out
+            out["steps"].append({"step": "create_session", "ok": bool(sid), "id": sid})
+            if not sid:
+                return out
+
+            body: dict = {"parts": [{"type": "text", "text": prompt}]}
+            if self.model_id:
+                body["model"] = {"providerID": self.provider_id,
+                                 "modelID": self.model_id}
+            if self.agent:
+                body["agent"] = self.agent
+
+            old_to = self.timeout
+            self.timeout = timeout
+            try:
+                t0 = time.time()
+                resp = self._req("POST", f"/session/{sid}/message", body)
+                out["steps"].append({
+                    "step": "send_message", "ok": True,
+                    "ms": int((time.time() - t0) * 1000),
+                    "preview": json.dumps(resp, ensure_ascii=False)[:400]})
+                return out
+            except Exception as exc:                # noqa: BLE001
+                out["steps"].append({"step": "send_message", "ok": False,
+                                     "error": str(exc)[:300]})
+            finally:
+                self.timeout = old_to
+
+            # 卡住了：看看服务端到底有没有产出、有没有等权限
+            for name, path in (("messages", f"/session/{sid}/message"),
+                               ("permission", f"/session/{sid}/permission")):
+                try:
+                    d = self._req("GET", path)
+                    out["steps"].append({"step": name, "ok": True,
+                                         "preview": json.dumps(d, ensure_ascii=False)[:600]})
+                except Exception as exc:            # noqa: BLE001
+                    out["steps"].append({"step": name, "ok": False,
+                                         "error": str(exc)[:200]})
+            return out
+        finally:
+            if sid:
+                try:
+                    self._req("DELETE", f"/session/{sid}")
+                except Exception:
+                    pass
+
     # ---- 诊断：把 server 的真实情况拉回来 ----
     def diagnose(self) -> dict:
         out: dict = {"base": self.base, "steps": []}
