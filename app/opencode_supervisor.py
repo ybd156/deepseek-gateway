@@ -141,10 +141,27 @@ class OpenCodeSupervisor:
             i += 1
         return "".join(out)
 
+    @staticmethod
+    def _drop_csi_leftovers(text: str) -> str:
+        """ESC 被吃掉后常剩下 [39m / [7m 这种残渣，一并清掉。"""
+        out, i = [], 0
+        while i < len(text):
+            if text[i] == "[":
+                j = i + 1
+                while j < len(text) and (text[j].isdigit() or text[j] == ";"):
+                    j += 1
+                if j > i + 1 and j < len(text) and text[j].isalpha():
+                    i = j + 1
+                    continue
+            out.append(text[i])
+            i += 1
+        return "".join(out)
+
     @classmethod
     def _clean_pty(cls, raw: str) -> str:
         """TUI 会逐字符重绘，这里把 ANSI 去掉、把碎行拼回去。"""
         text = cls._strip_ansi(raw)
+        text = cls._drop_csi_leftovers(text)
         text = text.replace(chr(13) + chr(10), chr(10)).replace(chr(13), chr(10))
         lines = text.split(chr(10))
         short = sum(1 for ln in lines if len(ln.strip()) == 1)
@@ -184,7 +201,21 @@ class OpenCodeSupervisor:
         text = self._clean_pty(raw)
         low = text.lower()
         urls = self._find_urls(text)
-        st = {"state": "idle", "title": "还没开始登录",
+        scr = " ".join(text.split()) if text.strip() else ""
+        # 去掉开头残留的 SGR 片段（如 39m_）和光标占位符
+        for _ in range(8):
+            if not scr:
+                break
+            j = 0
+            while j < len(scr) and (scr[j].isdigit() or scr[j] in "[;"):
+                j += 1
+            if 0 < j < len(scr) and scr[j] in "mM":
+                scr = scr[j + 1:].lstrip("_ ")
+                continue
+            break
+        scr = scr.replace("_", " ")
+        screen = scr[-180:]
+        st = {"state": "idle", "screen": screen, "title": "还没开始登录",
               "hint": "点下面的「登录 OpenCode」开始，全程三步。",
               "actions": [], "url": "", "raw": text[-3000:]}
         if not text.strip():
