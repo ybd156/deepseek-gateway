@@ -541,12 +541,53 @@ def main() -> int:
         check("model-off" not in ids, "停用的上游不出现在列表", str(ids))
         check("model-nokey" not in ids, "缺密钥的不出现在列表", str(ids))
 
-        print("== 26. 模型带上下文与能力 ==")
+        print("== 26. 模型带上下文 / 最大输出 / 图片 ==")
         item = next((m for m in json.loads(txt)["data"] if m["id"] == "model-on"), {})
         check(item.get("context_length", 0) > 0, "带 context_length",
               str(item.get("context_length")))
+        check(item.get("context_window") == item.get("context_length"),
+              "带 context_window 别名", str(item.get("context_window")))
+        check(item.get("max_output_tokens", 0) > 0, "带 max_output_tokens",
+              str(item.get("max_output_tokens")))
+        check(item.get("max_tokens") == item.get("max_output_tokens"),
+              "带 max_tokens 别名", str(item.get("max_tokens")))
+        check(item.get("supports_vision") is False, "带 supports_vision",
+              str(item.get("supports_vision")))
         check("capabilities" in item and "vision" in item["capabilities"],
               "带 capabilities")
+        mi = item.get("model_info") or {}
+        check(mi.get("context_size", 0) > 0 and mi.get("max_output", 0) > 0,
+              "带 model_info 聚合字段", str(mi))
+
+        print("== 26b. 视觉模型的能力值 ==")
+        http("POST", base + "/admin/api/config", {
+            "strategy": "priority", "cooldown_seconds": 5,
+            "providers": [
+                {"name": "vis", "enabled": True, "priority": 1,
+                 "base_url": f"http://127.0.0.1:{UP_PORT}",
+                 "model": "glm-5.3-flash", "api_key": "k"}]})
+        code, _, txt = http("GET", base + "/v1/models",
+                            headers={"Authorization": "Bearer " + key})
+        v = next((m for m in json.loads(txt)["data"] if m["id"] == "glm-5.3-flash"), {})
+        check(v.get("supports_vision") is True, "GLM 5.3 标为支持图片",
+              str(v.get("supports_vision")))
+        check(v.get("context_length") == 200000, "上下文 200K",
+              str(v.get("context_length")))
+        check(v.get("max_output_tokens") == 65536, "最大输出 64K",
+              str(v.get("max_output_tokens")))
+        # 复原成 25 用的三上游配置，后面的用例还要用
+        http("POST", base + "/admin/api/config", {
+            "strategy": "priority", "cooldown_seconds": 5,
+            "providers": [
+                {"name": "on-prov", "enabled": True, "priority": 1,
+                 "base_url": f"http://127.0.0.1:{UP_PORT}",
+                 "model": "model-on", "api_key": "k"},
+                {"name": "off-prov", "enabled": False, "priority": 2,
+                 "base_url": f"http://127.0.0.1:{UP_PORT}",
+                 "model": "model-off", "api_key": "k"},
+                {"name": "nokey-prov", "enabled": True, "priority": 3,
+                 "base_url": f"http://127.0.0.1:{UP_PORT}",
+                 "model": "model-nokey", "api_key_env": "NOT_SET_KEY"}]})
 
         print("== 27. 管理员能看全量（含不可用原因）==")
         code, _, txt = http("GET", base + "/v1/models?all=1",
