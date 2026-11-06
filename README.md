@@ -58,13 +58,43 @@
 
 ```json
 {
-  "id": "opencode/deepseek-v4.1-flash-free",
+  "id": "opencode/glm-5.3-flash-free",
   "object": "model",
   "owned_by": "opencode-free",
-  "context_length": 128000,
-  "capabilities": { "vision": false, "reasoning": ["off","low","medium","high"] }
+
+  "context_length": 200000,
+  "context_window": 200000,
+  "max_context_length": 200000,
+
+  "max_output_tokens": 65536,
+  "max_tokens": 65536,
+
+  "supports_vision": true,
+  "vision": true,
+  "supports_reasoning": true,
+  "reasoning_efforts": ["off", "low", "medium", "high"],
+
+  "capabilities": {
+    "vision": true,
+    "reasoning": ["off", "low", "medium", "high"],
+    "context": 200000,
+    "max_output": 65536
+  },
+  "model_info": {
+    "context_size": 200000,
+    "max_output": 65536,
+    "support_vision": true,
+    "support_reasoning": true,
+    "support_function_call": true
+  }
 }
 ```
+
+同一份能力用多套字段名一起发（`context_length` / `context_window`、
+`max_output_tokens` / `max_tokens`、`supports_vision` / `capabilities.vision`、
+以及 NewAPI 风格的 `model_info`），客户端认哪个都能读到。
+
+数值来自内置能力表，可以在「模型」页逐条改。
 
 - `GET /v1/models/{id}` — 查单个
 - `GET /v1/models?all=1` — 管理员用，连不可用的也列，并给出 `unavailable_reason`
