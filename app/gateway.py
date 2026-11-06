@@ -367,7 +367,41 @@ def config_save(body: dict) -> dict:
     if patch:
         save_runtime(patch)
     load_config()
-    return config_snapshot()
+    snap = config_snapshot()
+    # 回显磁盘上真正存下来的值，便于确认"到底存没存"
+    try:
+        with open(SETTINGS_PATH, encoding="utf-8") as fh:
+            disk = json.load(fh) or {}
+        snap["on_disk"] = {
+            "proxy": str(disk.get("proxy") or ""),
+            "strategy": str(disk.get("strategy") or ""),
+            "cooldown_seconds": disk.get("cooldown_seconds"),
+            "opencode_port": disk.get("opencode_port"),
+        }
+    except Exception as exc:                        # noqa: BLE001
+        snap["on_disk"] = {"error": str(exc)}
+    return snap
+
+
+def test_proxy(proxy_url: str, target: str = "https://api.deepseek.com/") -> dict:
+    """真连一次：走该代理请求一个地址，返回耗时与状态。"""
+    opener = build_opener(proxy_url, 8)
+    if opener is None:
+        return {"ok": False, "error": "没有配置代理", "target": target}
+    t0 = time.time()
+    try:
+        req = urllib.request.Request(target, method="GET",
+                                     headers={"User-Agent": "fnos-gateway-probe"})
+        with opener.open(req, timeout=8) as r:
+            return {"ok": True, "ms": int((time.time() - t0) * 1000),
+                    "status": r.status, "target": target}
+    except urllib.error.HTTPError as exc:
+        return {"ok": True, "ms": int((time.time() - t0) * 1000),
+                "status": exc.code, "target": target,
+                "note": "通道是通的（HTTP 错误码也说明连上了）"}
+    except Exception as exc:                        # noqa: BLE001
+        return {"ok": False, "ms": int((time.time() - t0) * 1000),
+                "error": f"{type(exc).__name__}: {exc}", "target": target}
 
 
 def tokens_payload() -> dict:
@@ -921,6 +955,8 @@ class Handler(BaseHTTPRequestHandler):
             self.handle_opencode()
         elif path == "/admin/api/tokens":
             self.handle_tokens()
+        elif path == "/admin/api/proxy-test":
+            self.handle_proxy_test()
         elif path == "/admin/api/reload":
             if not authorized(self):
                 self.send_json(401, {"error": "unauthorized"})
@@ -985,6 +1021,19 @@ class Handler(BaseHTTPRequestHandler):
                 "error": err_text(exc)[:300],
             })
 
+    def handle_proxy_test(self) -> None:
+        if not authorized(self):
+            self.send_json(401, {"error": "unauthorized"})
+            return
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+            body = json.loads(self.rfile.read(length) or b"{}")
+        except Exception:
+            body = {}
+        proxy = str(body.get("proxy") or RUNTIME.get("proxy") or "")
+        target = str(body.get("target") or "https://api.deepseek.com/")
+        self.send_json(200, test_proxy(proxy, target))
+
     def handle_tokens(self) -> None:
         """访问令牌管理：create / toggle / delete / rename。"""
         if not authorized(self):
@@ -1024,6 +1073,17 @@ class Handler(BaseHTTPRequestHandler):
         tid = str(body.get("id", ""))
         if action in ("toggle", "delete", "rename") and not tid:
             self.send_json(400, {"ok": False, "error": "缺少 id"})
+            return
+
+        if action == "reveal":
+            if not is_admin(self):
+                self.send_json(403, {"ok": False, "error": "只有管理员能查看完整 Key"})
+                return
+            for t in items:
+                if t.get("id") == tid:
+                    self.send_json(200, {"ok": True, "id": tid, "key": t.get("key", "")})
+                    return
+            self.send_json(404, {"ok": False, "error": "令牌不存在"})
             return
 
         if action == "toggle":
@@ -1677,6 +1737,8 @@ _SETTINGS_BODY = """
       <option value="socks5h">SOCKS5（代理解析域名）</option>
     </select>
     <input id="setProxyAddr" placeholder="主机:端口，如 192.168.1.10:7890" style="flex:1;min-width:240px">
+    <button onclick="testProxy()">测试</button>
+    <span class="sub" id="proxyMsg"></span>
   </div>
 
   <h2>OpenCode 运行时（给 type=opencode 的上游用）</h2>
@@ -1835,7 +1897,10 @@ async function save(){
     if(d.ok){
       CFG = d; render();
       document.getElementById('setTok').value = '';
-      msg('已保存并生效');
+      const od = d.on_disk || {};
+      msg('已保存' + (od.proxy !== undefined
+        ? ('（磁盘：代理=' + (od.proxy || '空') + '，策略=' + (od.strategy || '-') + '）')
+        : ''));
     } else { msg('保存失败：' + (d.error || '未知错误')); }
   }catch(e){ msg('保存失败：' + e.message); }
 }
@@ -1942,7 +2007,9 @@ async function loadTokens(){
       const q = t.quota_tokens > 0 ? t.quota_tokens.toLocaleString() : '不限';
       return '<tr>'
         + '<td>' + esc(t.name) + '</td>'
-        + '<td class="mono">' + esc(t.key_masked) + '</td>'
+        + '<td class="mono"><span class="kv" data-id="' + esc(t.id) + '">'
+        + esc(t.key_masked) + '</span> '
+        + '<button data-id="' + esc(t.id) + '" onclick="tokReveal(this)">显示</button></td>'
         + '<td class="mono">' + t.used_tokens.toLocaleString() + ' / ' + q + '</td>'
         + '<td><span class="tag ' + (t.enabled ? 'g' : 'd') + '">'
         + (t.enabled ? '启用' : '停用') + '</span></td>'
@@ -1954,6 +2021,44 @@ async function loadTokens(){
     document.getElementById('tokBody').innerHTML =
       rows || '<tr><td colspan="5" class="sub">还没有令牌</td></tr>';
   }catch(e){ if(e.message !== 'unauthorized') msg('读取令牌失败：' + e.message); }
+}
+
+async function testProxy(){
+  const el = document.getElementById('proxyMsg');
+  const scheme = document.getElementById('setProxyScheme').value;
+  const addr = (document.getElementById('setProxyAddr').value || '').trim();
+  const proxy = (scheme && addr) ? (scheme + '://' + addr) : '';
+  if(!proxy){ el.textContent = '先填地址'; return; }
+  el.textContent = '测试中…';
+  try{
+    const d = await api('/admin/api/proxy-test', {method:'POST',
+      body: JSON.stringify({proxy: proxy})});
+    el.textContent = d.ok
+      ? ('通：HTTP ' + d.status + '  ' + d.ms + 'ms ' + (d.note || ''))
+      : ('失败：' + (d.error || '') + '（' + (d.ms || 0) + 'ms）');
+  }catch(e){ el.textContent = '测试失败：' + e.message; }
+}
+
+async function tokReveal(el){
+  const id = el.dataset.id;
+  const span = document.querySelector('.kv[data-id="' + id + '"]');
+  if(!span) return;
+  if(span.dataset.shown === '1'){
+    span.textContent = span.dataset.masked || '';
+    span.dataset.shown = '0';
+    el.textContent = '显示';
+    return;
+  }
+  try{
+    const d = await api('/admin/api/tokens', {method:'POST',
+      body: JSON.stringify({action:'reveal', id: id})});
+    if(d.ok){
+      span.dataset.masked = span.textContent;
+      span.textContent = d.key;
+      span.dataset.shown = '1';
+      el.textContent = '隐藏';
+    } else { msg('无法显示：' + (d.error || '')); }
+  }catch(e){ msg('失败：' + e.message); }
 }
 
 async function createTok(){
