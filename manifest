@@ -1,5 +1,5 @@
 appname=deepseek-gateway
-version=2.6.0
+version=2.6.1
 display_name=DeepSeek 网关
 desc=把火山方舟、硅基流动、OpenRouter、腾讯 TokenHub、百度千帆、DeepSeek 官方等多个上游聚合成一个 OpenAI 兼容端点。<br>默认只启用免费上游，付费一律关闭；免费额度用尽自动停用，绝不静默转付费。<br>纯 Python 标准库实现，不依赖 Docker 与任何第三方包。
 source=thirdparty
@@ -13,4 +13,4 @@ desktop_applaunchname=deepseek-gateway.main
 service_port=18787
 checkport=true
 ctl_stop=true
-changelog=2.6.0：OpenCode 支持无头登录——新增「登录 OpenCode」按钮，在伪终端里跑 opencode auth login，把浏览器授权链接/验证码显示到面板，你在电脑上点同意即可把凭证存到 NAS；新增「Console API Key」输入框，以 OPENCODE_API_KEY 注入 serve/run 进程；「试一句」结果显示实际二进制与版本。2.5.8：opencode-zen 预设。2.5.6：修复 EEXIST。2.5.x：opencode CLI。2.4.x：上游协议。2.3.x：日志页。1.1.0：免费优先。1.0.0：首个版本。
+changelog=2.6.1：修复登录输出乱码——TUI 逐字符重绘会把日志变成一字一行，现在会剥掉 ANSI 转义、把碎行拼回，并把授权链接单独提到最上面（复制到浏览器即可）。2.6.0：无头登录 + Console API Key 注入。2.5.8：opencode-zen 预设。2.5.6：修复 EEXIST。2.5.x：opencode CLI。2.4.x：上游协议。2.3.x：日志页。1.1.0：免费优先。1.0.0：首个版本。
