@@ -1,13 +1,30 @@
 #!/bin/bash
-# 配置变更后：重写 run.sh 并重启服务，让新密钥 / 策略立刻生效
+# 配置变更后：重写 run.sh；只有内容真变了才重启，避免白白掐断正在跑的请求
 LOG="$TRIM_PKGVAR/config.log"
 : > "$LOG" 2>/dev/null
 
 . "$TRIM_APPDEST/service.sh"
 
+RUN="$TRIM_PKGVAR/run.sh"
+before=""
+if [ -f "$RUN" ]; then
+    before="$(md5sum "$RUN" 2>/dev/null | cut -d' ' -f1)"
+fi
+
 if ! write_run >>"$LOG" 2>&1; then
     echo "写入运行配置失败，请检查应用数据目录权限。" > "$TRIM_TEMP_LOGFILE"
     exit 1
+fi
+
+after=""
+if [ -f "$RUN" ]; then
+    after="$(md5sum "$RUN" 2>/dev/null | cut -d' ' -f1)"
+fi
+
+# 内容没变且服务在跑 → 什么都不用做（面板改的设置是直接写 settings.json，不需要重启）
+if [ -n "$before" ] && [ "$before" = "$after" ] && gw_running; then
+    echo "配置无变化，保持服务运行" >>"$LOG"
+    exit 0
 fi
 
 gw_stop >>"$LOG" 2>&1
