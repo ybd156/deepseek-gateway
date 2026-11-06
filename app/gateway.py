@@ -81,6 +81,7 @@ def opencode_opts() -> dict:
         "workspace": str(data.get("opencode_workspace") or ws_default),
         "workspace_default": ws_default,
         "autostart": bool(data.get("opencode_autostart", True)),
+        "key_set": bool(str(load_secrets().get("OPENCODE_API_KEY") or "").strip()),
         "enabled": enabled,
     }
 
@@ -390,6 +391,12 @@ def config_save(body: dict) -> dict:
     except Exception:
         pass
 
+    _ock = str(body.get("opencode_api_key") or "").strip()
+    if _ock:
+        save_secret("OPENCODE_API_KEY", _ock)
+        os.environ["OPENCODE_API_KEY"] = _ock
+        os.environ.setdefault("OPENCODE_ZEN_API_KEY", _ock)
+
     for env, val in (body.get("secrets") or {}).items():
         save_secret(str(env), str(val or ""))
 
@@ -669,6 +676,12 @@ def load_config() -> None:
 
         SETTINGS = settings
         load_runtime()
+        # opencode 认环境变量里的 Console API Key；子进程（serve / run）会继承
+        _sec0 = load_secrets()
+        _ock = str(_sec0.get("OPENCODE_API_KEY") or "").strip()
+        if _ock:
+            os.environ["OPENCODE_API_KEY"] = _ock
+            os.environ.setdefault("OPENCODE_ZEN_API_KEY", _ock)
         overrides = read_overrides()
         secrets = load_secrets()
         default_timeout = int(SETTINGS.get("request_timeout", 180))
@@ -1819,6 +1832,14 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json(400, {"ok": False, "error": "bad request"})
             return
 
+        if action == "login":
+            ok_l, msg_l = SUPERVISOR.start_login("")
+            self.send_json(200, {**SUPERVISOR.status(), "ok": ok_l, "message": msg_l})
+            return
+        if action == "login-log":
+            self.send_json(200, {**SUPERVISOR.status(), "ok": True,
+                                 "message": "登录输出已刷新"})
+            return
         if action == "ping":
             ops = [x for x in PROVIDERS if x["type"] == "opencode"]
             on = [x for x in ops if x["enabled"]] or ops
@@ -1845,12 +1866,14 @@ class Handler(BaseHTTPRequestHandler):
                     print(f"[gateway] opencode cli 试一句成功：{text[:60]}", flush=True)
                     self.send_json(200, {**SUPERVISOR.status(), "ok": True,
                                          "message": f"试通了（cli / {bin_tag}）：{text[:80]}",
-                                         "probe": {"mode": "cli", "text": text[:400]}})
+                                         "probe": {"mode": "cli", "bin": bin_tag,
+                                                   "text": text[:400]}})
                 except Exception as exc:            # noqa: BLE001
                     print(f"[gateway] opencode cli 试一句失败：{exc}", flush=True)
                     self.send_json(200, {**SUPERVISOR.status(), "ok": False,
                                          "message": f"试失败（cli / {bin_tag}）：{str(exc)[:300]}",
-                                         "probe": {"mode": "cli", "error": str(exc)[:400]}})
+                                         "probe": {"mode": "cli", "bin": bin_tag,
+                                                   "error": str(exc)[:400]}})
                 return
 
             client = OpenCodeClient(base_url=base, model_id=model,
@@ -2788,18 +2811,26 @@ NAV
         <div class="field"><label>工作目录</label>
           <input id="ocWs" placeholder="留空 = 应用数据目录下 opencode-workspace">
           <div class="hint">建议留空。它是个编码 Agent，空目录能避免误动你的文件。</div></div>
+        <div class="field"><label>Console API Key（可选）</label>
+          <input id="ocKey" type="password" placeholder="留空 = 未设置">
+          <div class="hint">会以 <span class="mono">OPENCODE_API_KEY</span> 注入 opencode 进程
+            （serve 和 run 都继承）。免费模型认不认它取决于官方策略；付费模型一定认。</div></div>
         <div class="row" style="margin-bottom:0">
           <label class="chk"><input id="ocAuto" type="checkbox"> 崩溃后自动重启</label>
           <span style="flex:1"></span>
           <button onclick="ocAction('install')">一键安装</button>
           <button onclick="ocAction('start')">启动</button>
           <button onclick="ocAction('stop')">停止</button>
+          <button onclick="ocAction('login')">登录 OpenCode</button>
+          <button onclick="ocAction('login-log')">登录输出</button>
           <button onclick="ocAction('ping')">试一句</button>
           <button onclick="ocAction('diagnose')">诊断</button>
           <button onclick="ocRefresh()">刷新</button>
         </div>
         <div class="sub" style="margin:10px 0 4px">启动输出</div>
         <pre id="ocLog">（暂无日志）</pre>
+        <div class="sub" style="margin:10px 0 4px">登录输出（auth login 的链接/验证码在这）</div>
+        <pre id="ocLogin">（还没有登录输出）</pre>
         <div class="sub" style="margin:10px 0 4px">opencode 自己的日志（provider 报错在这）</div>
         <pre id="ocOwnLog">（暂无）</pre>
       </div>
@@ -3033,6 +3064,8 @@ function render(){
     wsEl.placeholder = '默认：' + (oc.workspace_default || '应用数据目录下 opencode-workspace');
   }
   document.getElementById('ocAuto').checked = oc.autostart !== false;
+  const kEl = document.getElementById('ocKey');
+  if(kEl) kEl.placeholder = oc.key_set ? '已设置（留空不改）' : '留空 = 未设置';
   ocRefresh();
 }
 
@@ -3105,7 +3138,8 @@ function collect(){
     opencode_bin: document.getElementById('ocBin').value,
     opencode_port: Number(document.getElementById('ocPort').value || 4096),
     opencode_workspace: document.getElementById('ocWs').value,
-    opencode_autostart: document.getElementById('ocAuto').checked
+    opencode_autostart: document.getElementById('ocAuto').checked,
+    opencode_api_key: (document.getElementById('ocKey').value || '').trim()
   };
   const t = (document.getElementById('setTok').value || '').trim();
   if(t) body.gateway_token = t;
@@ -3265,6 +3299,8 @@ function ocPaint(d){
     (d.last_error ? ('[错误] ' + d.last_error + ' | ') : '') + (d.log || '（暂无日志）');
   const ol = document.getElementById('ocOwnLog');
   if(ol) ol.textContent = d.oc_logs || '（暂无）';
+  const lg = document.getElementById('ocLogin');
+  if(lg) lg.textContent = d.login_log || '（还没有登录输出）';
   document.getElementById('ocEnv').textContent =
     'Node ' + (d.node_version || (d.node ? '?' : '未找到'))
     + (d.node ? ('（' + d.node + '）') : '')
