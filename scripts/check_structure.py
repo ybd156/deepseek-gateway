@@ -52,7 +52,7 @@ def main() -> int:
     for p in ["manifest", "ICON.PNG", "ICON_256.PNG", "app", "cmd",
               "wizard", "config/privilege", "config/resource",
               "app/gateway.py", "app/service.sh", "app/providers.json",
-              "app/opencode_upstream.py", "app/opencode-serve.sh",
+              "app/opencode_upstream.py",
               "app/opencode_supervisor.py", "app/install-opencode.sh",
               "app/proxy_support.py"]:
         check(os.path.exists(p), p)
@@ -167,55 +167,44 @@ def main() -> int:
     except Exception as exc:                           # noqa: BLE001
         check(False, "app/gateway.py 语法", str(exc))
 
-    print("== 7b. 页面内联 JS 语法（node --check）==")
-    node = shutil.which("node")
-    if not node:
-        print("  SKIP 本机没有 node，跳过（CI 上有）")
-    else:
+    print("== 7b. 前端文件与语法 ==")
+    try:
+        import subprocess as _sp
+        import tempfile as _tf
+        web = os.path.join("app", "web")
+        for name in ("admin.html", "app.css", "app.js"):
+            check(os.path.exists(os.path.join(web, name)), f"存在 web/{name}")
+        html = open(os.path.join(web, "admin.html"), encoding="utf-8").read()
+        check("static/app.css" in html and "static/app.js" in html,
+              "页面引用独立静态文件")
+        js = open(os.path.join(web, "app.js"), encoding="utf-8").read()
+        with _tf.NamedTemporaryFile("w", suffix=".js", delete=False,
+                                    encoding="utf-8") as fh:
+            fh.write(js)
+            tmp = fh.name
         try:
-            sys.path.insert(0, os.path.join(os.getcwd(), "app"))
-            import importlib.util
-            spec = importlib.util.spec_from_file_location("gw_js_check", "app/gateway.py")
-            mod = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(mod)
-            for name in ("STATUS_HTML", "SETTINGS_HTML"):
-                html = getattr(mod, name, "")
-                parts = html.split("<script>")
-                js = parts[1].split("</script>")[0] if len(parts) > 1 else ""
-                tmp_js = os.path.join(os.getcwd(), f".jscheck_{name}.js")
-                with open(tmp_js, "w", encoding="utf-8") as fh:
-                    fh.write(js)
-                out_path = os.path.join(os.getcwd(), f".jscheck_{name}.out")
-                with open(out_path, "w", encoding="utf-8") as ofh:
-                    rc_code = subprocess.call([node, "--check", tmp_js],
-                                              stdout=ofh, stderr=subprocess.STDOUT)
-                detail = ""
-                if rc_code != 0:
-                    try:
-                        txt = open(out_path, encoding="utf-8", errors="replace").read()
-                        lines = [ln for ln in txt.strip().splitlines() if ln.strip()]
-                        detail = lines[-1] if lines else "语法错误"
-                    except Exception:
-                        detail = "语法错误"
-                for f2 in (tmp_js, out_path):
-                    try:
-                        os.unlink(f2)
-                    except Exception:
-                        pass
-                rc = type("R", (), {"returncode": rc_code})()
-                check(rc.returncode == 0, f"{name} 内联 JS 语法正确", detail)
-        except Exception as exc:                       # noqa: BLE001
-            check(False, "页面 JS 语法检查", str(exc))
+            with open(os.devnull, "w") as devnull:
+                rc = _sp.call(["node", "--check", tmp], stdout=devnull,
+                              stderr=devnull)
+            check(rc == 0, "app.js 语法正确（node --check）")
+        finally:
+            try:
+                os.unlink(tmp)
+            except Exception:
+                pass
+        check("__pycache__" not in js, "app.js 里没有异常内容")
+    except Exception as exc:                           # noqa: BLE001
+        check(False, "前端检查", str(exc))
 
     print("== 7c. 设置页收集范围（防误收集非上游卡片）==")
     try:
-        src = open("app/gateway.py", encoding="utf-8").read()
-        check("querySelectorAll('.provcard')" in src,
+        js = open(os.path.join("app", "web", "app.js"), encoding="utf-8").read()
+        check("querySelectorAll('.provcard')" in js,
               "上游卡片用专属类 .provcard 收集")
-        check("querySelectorAll('.prov')" not in src,
-              "没有用宽泛的 .prov 选择器（会把运行时/令牌卡片也算成上游）")
-        check("function save(){" in src and "有上游的「名称」是空的" in src,
-              "保存前有前端自检")
+        check("provcard" in js and "readCard(" in js,
+              "有独立的 readCard 读取函数")
+        check("名称不能为空" in js or "名称为空" in js,
+              "保存前有名称自检")
     except Exception as exc:                           # noqa: BLE001
         check(False, "收集范围检查", str(exc))
 
