@@ -60,9 +60,29 @@ class Upstream(BaseHTTPRequestHandler):
     def log_message(self, *a):
         pass
 
+    def do_GET(self):
+        if self.path.rstrip("/").endswith("/models"):
+            self._json = None
+            out = {"object": "list", "data": [
+                {"id": "m-one"},
+                {"id": "free-model:free"},
+                {"id": "m-two", "pricing": {"prompt": "0", "completion": "0"}},
+            ]}
+            data = json.dumps(out).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+        else:
+            self.send_response(404)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+
     def do_POST(self):
         length = int(self.headers.get("Content-Length") or 0)
         body = json.loads(self.rfile.read(length) or b"{}")
+        echo = body.get("model") or MODEL
         if body.get("stream"):
             self.send_response(200)
             self.send_header("Content-Type", "text/event-stream")
@@ -70,10 +90,10 @@ class Upstream(BaseHTTPRequestHandler):
             self.end_headers()
             for piece in ("你好", "，这是", "假上游"):
                 ev = {"id": "chatcmpl-x", "object": "chat.completion.chunk",
-                      "model": MODEL,
+                      "model": echo,
                       "choices": [{"index": 0, "delta": {"content": piece}}]}
                 self._chunk(f"data: {json.dumps(ev, ensure_ascii=False)}\n\n".encode())
-            tail = {"id": "chatcmpl-x", "object": "chat.completion.chunk", "model": MODEL,
+            tail = {"id": "chatcmpl-x", "object": "chat.completion.chunk", "model": echo,
                     "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
                     "usage": {"prompt_tokens": 12, "completion_tokens": 7}}
             self._chunk(f"data: {json.dumps(tail, ensure_ascii=False)}\n\n".encode())
@@ -81,7 +101,7 @@ class Upstream(BaseHTTPRequestHandler):
             self.wfile.write(b"0\r\n\r\n")
             self.wfile.flush()
         else:
-            out = {"id": "chatcmpl-x", "object": "chat.completion", "model": MODEL,
+            out = {"id": "chatcmpl-x", "object": "chat.completion", "model": echo,
                    "choices": [{"index": 0, "message": {"role": "assistant",
                                                         "content": "pong"},
                                 "finish_reason": "stop"}],
@@ -768,6 +788,45 @@ def main() -> int:
 
         code, _, _ = http("OPTIONS", base + "/v1/chat/completions")
         check(code == 204, "OPTIONS 预检返回 204", str(code))
+
+        print("== 21. 多模型与模型探测 ==")
+        code, _, txt = http("POST", base + "/admin/api/discover", {"name": "good"})
+        d6 = json.loads(txt) if code == 200 else {}
+        ids = [m["id"] for m in d6.get("models", [])]
+        check(d6.get("ok") is True and len(ids) >= 3, "探测到模型列表", str(ids[:4]))
+        freeids = [m["id"] for m in d6.get("models", []) if m.get("free")]
+        check("free-model:free" in freeids and "m-two" in freeids,
+              "识别出免费模型（含 pricing=0）", str(freeids))
+
+        code, _, txt = http("GET", base + "/admin/api/config")
+        cfg4 = json.loads(txt)
+        for pp in cfg4["providers"]:
+            if pp["name"] == "good":
+                pp["models"] = ["alt-model", "third-model"]
+        code, _, txt = http("POST", base + "/admin/api/config", cfg4)
+        check(code == 200 and json.loads(txt).get("ok"), "保存多模型配置", txt[:80])
+        code, _, txt = http("GET", base + "/admin/api/config")
+        gg = next((x for x in json.loads(txt).get("providers", [])
+                   if x["name"] == "good"), {})
+        check(gg.get("models") == ["alt-model", "third-model"],
+              "models 已写回配置", str(gg.get("models")))
+
+        code, hdrs, txt = http("POST", base + "/v1/chat/completions",
+                            {"model": "alt-model",
+                             "messages": [{"role": "user", "content": "hi"}]},
+                            headers={"Authorization": "Bearer " + key1})
+        try:
+            body = json.loads(txt) if code == 200 else {}
+        except Exception as exc:
+            body = {"_parse_error": str(exc), "_raw": txt[:300]}
+        check(code == 200 and body.get("model") == "alt-model",
+              "客户端点名的模型被送到上游",
+              f"provider={hdrs.get('X-Gateway-Provider')} model={body.get('model')}")
+
+        code, _, txt = http("GET", base + "/v1/models",
+                            headers={"Authorization": "Bearer " + key1})
+        allids = [m["id"] for m in json.loads(txt).get("data", [])]
+        check("alt-model" in allids, "/v1/models 列出多模型", str(allids[:6]))
 
     finally:
         proc.terminate()
