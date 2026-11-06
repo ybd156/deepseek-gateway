@@ -1,5 +1,5 @@
 appname=deepseek-gateway
-version=3.0.2
+version=3.0.3
 display_name=AI 网关
 desc=把多个模型服务商聚合成一个 OpenAI 兼容接口，跑在自己的飞牛 NAS 上。<br>支持 OpenAI Chat / Responses / Anthropic / Gemini 四种上游协议，失败自动切换下一家。<br>带用量统计（按天、按上游）、访问令牌、调用日志、出站品牌词脱敏、本地 opencode 托管。<br>免费额度可硬卡，用尽自动停用，绝不静默转付费。纯 Python 标准库，零第三方依赖，零 Docker。
 source=thirdparty
@@ -13,4 +13,4 @@ desktop_applaunchname=deepseek-gateway.main
 service_port=18787
 checkport=true
 ctl_stop=true
-changelog=3.0.2：修复客户端拉到的模型清单不对——/v1/models 以前把停用的、缺密钥的上游的模型也列出来，客户端里一堆点了就 502 的名字；现在只列真正能用的，并带上 context_length 与图片/思考能力，支持 /v1/models/{id} 单查，管理员可用 ?all=1 看全量并看到不可用原因。「模型」页新增「状态」列，直接显示每个模型能不能用、为什么不能用。3.0.1：命令行模式不再要求启动服务/登录；点名的模型不再被静默替换。3.0.0：整体重写。
+changelog=3.0.3：模型的上下文长度、最大输出 tokens、是否支持图片，现在随 /v1/models 一起下发，并且同一份能力用多套常见字段名给出（context_length / context_window / max_context_length、max_output_tokens / max_tokens、supports_vision / capabilities.vision、model_info 聚合字段），客户端认哪个都能读到；「模型」页可直接改这三个值。3.0.2：只列真正能用的模型。3.0.1：命令行模式不要求启动服务/登录。3.0.0：整体重写。
