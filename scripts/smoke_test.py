@@ -519,6 +519,66 @@ def main() -> int:
         for f in ("cli_mode", "needs_server", "needs_login", "ready", "installed"):
             check(f in oc, "状态含字段 " + f, str(list(oc))[:80])
 
+
+        print("== 25. /v1/models 只列能用的 ==")
+        http("POST", base + "/admin/api/config", {
+            "strategy": "priority", "cooldown_seconds": 5,
+            "providers": [
+                {"name": "on-prov", "enabled": True, "priority": 1,
+                 "base_url": f"http://127.0.0.1:{UP_PORT}",
+                 "model": "model-on", "api_key": "k"},
+                {"name": "off-prov", "enabled": False, "priority": 2,
+                 "base_url": f"http://127.0.0.1:{UP_PORT}",
+                 "model": "model-off", "api_key": "k"},
+                {"name": "nokey-prov", "enabled": True, "priority": 3,
+                 "base_url": f"http://127.0.0.1:{UP_PORT}",
+                 "model": "model-nokey", "api_key_env": "NOT_SET_KEY"}]})
+        code, _, txt = http("GET", base + "/v1/models",
+                            headers={"Authorization": "Bearer " + key})
+        ids = [m["id"] for m in json.loads(txt).get("data", [])]
+        check(code == 200, "列表可读", str(code))
+        check("model-on" in ids, "启用的模型在列表里", str(ids))
+        check("model-off" not in ids, "停用的上游不出现在列表", str(ids))
+        check("model-nokey" not in ids, "缺密钥的不出现在列表", str(ids))
+
+        print("== 26. 模型带上下文与能力 ==")
+        item = next((m for m in json.loads(txt)["data"] if m["id"] == "model-on"), {})
+        check(item.get("context_length", 0) > 0, "带 context_length",
+              str(item.get("context_length")))
+        check("capabilities" in item and "vision" in item["capabilities"],
+              "带 capabilities")
+
+        print("== 27. 管理员能看全量（含不可用原因）==")
+        code, _, txt = http("GET", base + "/v1/models?all=1",
+                            headers={"Authorization": "Bearer " + key})
+        allrows = json.loads(txt).get("data", [])
+        ids_all = [m["id"] for m in allrows]
+        check("model-off" in ids_all, "全量含停用的", str(ids_all))
+        off = next((m for m in allrows if m["id"] == "model-off"), {})
+        check(off.get("available") is False, "标出不可用", str(off.get("available")))
+        check("未启用" in str(off.get("unavailable_reason")),
+              "说明原因", str(off.get("unavailable_reason")))
+
+        print("== 28. 单个模型查询 ==")
+        code, _, txt = http("GET", base + "/v1/models/model-on",
+                            headers={"Authorization": "Bearer " + key})
+        check(code == 200 and json.loads(txt).get("id") == "model-on", "能查单个", str(code))
+        code, _, _ = http("GET", base + "/v1/models/no-such-model",
+                          headers={"Authorization": "Bearer " + key})
+        check(code == 404, "不存在的返回 404", str(code))
+
+        print("== 29. 排查接口 ==")
+        code, _, txt = http("GET", base + "/admin/api/models-check")
+        mc = json.loads(txt)
+        check(code == 200 and mc.get("ok") is True, "排查可读", str(code))
+        check(mc.get("total", 0) >= 3, "列出全部模型", str(mc.get("total")))
+        check(mc.get("usable", 0) < mc.get("total", 0), "区分可用与不可用",
+              str(mc.get("usable")) + "/" + str(mc.get("total")))
+
+        http("POST", base + "/admin/api/config", {
+            "strategy": "priority", "cooldown_seconds": 5,
+            "providers": base_providers})
+
     finally:
         try:
             proc.terminate()
