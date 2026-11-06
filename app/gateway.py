@@ -25,6 +25,8 @@ from __future__ import annotations
 import json
 import os
 import signal
+import socket
+import socketserver
 import sqlite3
 import threading
 import time
@@ -36,6 +38,10 @@ from urllib.parse import urlparse
 from opencode_upstream import OpenCodeClient, OpenCodeError
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+APPNAME = "deepseek-gateway"
+# 统一网关路径前缀（飞牛会把 /app/deepseek-gateway/* 转发到 Unix Socket）
+GATEWAY_PREFIX = os.getenv("GATEWAY_PREFIX", "/app/" + APPNAME).rstrip("/")
+SOCKET_PATH = os.getenv("GATEWAY_SOCKET", "").strip()
 CONFIG_PATH = os.getenv("CONFIG_PATH") or os.path.join(BASE_DIR, "providers.json")
 DATA_DIR = os.getenv("DATA_DIR") or os.path.join(BASE_DIR, "data")
 DB_PATH = os.path.join(DATA_DIR, "usage.db")
@@ -48,7 +54,7 @@ HOST = os.getenv("HOST", "0.0.0.0")
 # 运行时设置（面板里改的，落盘到 DATA_DIR/settings.json）
 SETTINGS_PATH = os.path.join(DATA_DIR, "settings.json")
 RUNTIME: dict = {"strategy": "priority", "cooldown": DEFAULT_COOLDOWN,
-                 "gateway_token": GATEWAY_TOKEN}
+                 "gateway_token": GATEWAY_TOKEN, "proxy": ""}
 
 PROVIDERS: list[dict] = []
 SETTINGS: dict = {}
@@ -142,7 +148,8 @@ def load_runtime() -> None:
     else:
         token = GATEWAY_TOKEN
 
-    RUNTIME.update(strategy=strategy, cooldown=max(1, cooldown), gateway_token=token)
+    RUNTIME.update(strategy=strategy, cooldown=max(1, cooldown), gateway_token=token,
+                   proxy=str(data.get("proxy") or os.getenv("HTTP_PROXY") or "").strip())
 
 
 def save_runtime(patch: dict) -> None:
@@ -162,6 +169,118 @@ def save_runtime(patch: dict) -> None:
     except Exception:
         pass
     os.replace(tmp, SETTINGS_PATH)
+
+
+def atomic_write_json(path: str, data) -> None:
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump(data, fh, ensure_ascii=False, indent=2)
+    os.replace(tmp, path)
+
+
+# 设置页里可编辑的字段（其余字段（extra 等）留在 JSON 里手工改）
+EDITABLE_FIELDS = ("name", "type", "enabled", "priority", "base_url", "model",
+                   "model_contains", "strict_model", "free_only", "free_quota_tokens",
+                   "price_in", "price_out", "quant", "proxy", "console_url",
+                   "note", "api_key_env", "opencode_provider", "opencode_agent")
+
+
+def config_snapshot() -> dict:
+    """给设置页的完整快照：全局设置 + 所有上游（按来源文件标记）。"""
+    resolved = {p["name"]: p for p in PROVIDERS}
+    sec = load_secrets()
+    provs: list[dict] = []
+    for path in provider_files():
+        try:
+            with open(path, encoding="utf-8") as fh:
+                data = json.load(fh) or {}
+        except Exception:
+            continue
+        src = ("main" if os.path.abspath(path) == os.path.abspath(CONFIG_PATH)
+               else os.path.basename(path))
+        for it in data.get("providers") or []:
+            item = {k: it.get(k) for k in EDITABLE_FIELDS if k in it}
+            item["_source"] = src
+            r = resolved.get(str(it.get("name", "")))
+            item["_has_key"] = bool(r and r["api_key"])
+            item["_key_source"] = provider_key_source(r, sec) if r else "无"
+            provs.append(item)
+    return {
+        "strategy": RUNTIME["strategy"],
+        "cooldown_seconds": RUNTIME["cooldown"],
+        "proxy": RUNTIME.get("proxy", ""),
+        "auth_enabled": bool(RUNTIME["gateway_token"]),
+        "prefix": GATEWAY_PREFIX,
+        "socket": SOCKET_PATH,
+        "providers": provs,
+    }
+
+
+def config_save(body: dict) -> dict:
+    """整页保存：全局设置 + 上游（按 _source 写回各自文件）+ 密钥。"""
+    patch: dict = {}
+    if "strategy" in body:
+        s = str(body["strategy"]).strip().lower()
+        if s not in ("priority", "cheapest"):
+            raise ValueError("策略只能是 priority / cheapest")
+        patch["strategy"] = s
+    if "cooldown_seconds" in body:
+        try:
+            patch["cooldown_seconds"] = max(1, min(int(body["cooldown_seconds"]), 3600))
+        except Exception:
+            raise ValueError("冷却必须是整数秒") from None
+    if "gateway_token" in body:
+        patch["gateway_token"] = str(body["gateway_token"] or "").strip()
+    if "proxy" in body:
+        patch["proxy"] = str(body["proxy"] or "").strip()
+
+    groups: dict[str, list] = {}
+    for raw in body.get("providers") or []:
+        if not isinstance(raw, dict):
+            continue
+        name = str(raw.get("name") or "").strip()
+        if not name:
+            raise ValueError("每个上游都必须有 name")
+        item = {k: raw[k] for k in EDITABLE_FIELDS if k in raw}
+        item["name"] = name
+        item.setdefault("base_url", "")
+        item.setdefault("model", "")
+        groups.setdefault(str(raw.get("_source") or "main"), []).append(item)
+
+    base_dir = os.path.dirname(os.path.abspath(CONFIG_PATH))
+    for src, items in groups.items():
+        path = CONFIG_PATH if src == "main" else os.path.join(base_dir, "providers.d", src)
+        try:
+            with open(path, encoding="utf-8") as fh:
+                existing = json.load(fh) or {}
+        except Exception:
+            existing = {}
+        existing["providers"] = items
+        atomic_write_json(path, existing)
+
+    for env, val in (body.get("secrets") or {}).items():
+        save_secret(str(env), str(val or ""))
+
+    if patch:
+        save_runtime(patch)
+    load_config()
+    return config_snapshot()
+
+
+def provider_key_source(p: dict, sec: dict | None = None) -> str:
+    """密钥来源：面板 / 向导 / 配置 / 无 / 本地(opencode)。"""
+    if p["type"] == "opencode":
+        return "本地"
+    if sec is None:
+        sec = load_secrets()
+    if p["key_env"] and sec.get(p["key_env"]):
+        return "面板"
+    if p["key_env"] and os.getenv(p["key_env"]):
+        return "向导"
+    if p["api_key"]:
+        return "配置"
+    return "无"
 
 
 def provider_files() -> list[str]:
@@ -243,6 +362,8 @@ def load_config() -> None:
                 "opencode_agent": str(it.get("opencode_agent", "") or ""),
                 "opencode_tools": it.get("opencode_tools"),
                 "opencode_extra": it.get("opencode_extra") or {},
+                "proxy": str(it.get("proxy", "") or ""),
+                "console_url": str(it.get("console_url", "") or ""),
                 "note": str(it.get("note", "")),
             })
         PROVIDERS = items
@@ -480,7 +601,14 @@ def call_provider(p: dict, payload: dict) -> tuple[dict, str]:
         headers=headers_for(p, bool(payload.get("stream"))),
         method="POST")
     try:
-        resp = urllib.request.urlopen(req, timeout=p["timeout"])
+        # 每个上游可以单独指定代理；没指定就用全局代理
+        proxy = p.get("proxy") or RUNTIME.get("proxy") or ""
+        if proxy:
+            opener = urllib.request.build_opener(
+                urllib.request.ProxyHandler({"http": proxy, "https": proxy}))
+            resp = opener.open(req, timeout=p["timeout"])
+        else:
+            resp = urllib.request.urlopen(req, timeout=p["timeout"])
         try:
             raw = resp.read()
         finally:
@@ -496,12 +624,22 @@ def call_provider(p: dict, payload: dict) -> tuple[dict, str]:
 
 
 def authorized(handler: BaseHTTPRequestHandler) -> bool:
+    # 走飞牛统一网关：fnOS 已经校验过 NAS 登录态，直接放行
+    if getattr(handler.server, "is_gateway", False):
+        return bool(handler.headers.get("X-Trim-Userid"))
     token = RUNTIME["gateway_token"]
     if not token:
         return True
     auth = handler.headers.get("Authorization", "")
     got = auth[7:].strip() if auth.lower().startswith("bearer ") else ""
     return got == token
+
+
+def is_admin(handler: BaseHTTPRequestHandler) -> bool:
+    """写操作权限：走网关时要求 NAS 管理员；端口直连 + 口令通过视为管理员。"""
+    if getattr(handler.server, "is_gateway", False):
+        return str(handler.headers.get("X-Trim-Isadmin", "")).lower() == "true"
+    return True
 
 
 # ─────────────────────────── HTTP 处理 ───────────────────────────
@@ -534,12 +672,42 @@ class Handler(BaseHTTPRequestHandler):
         pass
 
     # ---- 路由 ----
+    def _path(self) -> str:
+        """把统一网关前缀剥掉，让同一套路由在两种入口下都能用。"""
+        path = urlparse(self.path).path or "/"
+        if GATEWAY_PREFIX and path.startswith(GATEWAY_PREFIX):
+            path = path[len(GATEWAY_PREFIX):] or "/"
+        return path
+
+    def _safe(self, fn) -> None:
+        """任何未捕获异常都变成 500 JSON，而不是直接掐断连接。"""
+        try:
+            fn()
+        except (BrokenPipeError, ConnectionResetError):
+            return
+        except Exception as exc:                    # noqa: BLE001
+            try:
+                self.send_json(500, {"ok": False,
+                                     "error": f"{type(exc).__name__}: {exc}"})
+            except Exception:
+                pass
+
     def do_GET(self) -> None:
-        path = urlparse(self.path).path
+        self._safe(self._do_get)
+
+    def _do_get(self) -> None:
+        path = self._path()
         if path == "/healthz":
             self.send_json(200, {"ok": True, "providers": len(PROVIDERS)})
         elif path in ("/", "/admin", "/admin/"):
-            self._send(200, ADMIN_HTML.encode("utf-8"), "text/html; charset=utf-8")
+            self._send(200, STATUS_HTML.encode("utf-8"), "text/html; charset=utf-8")
+        elif path in ("/settings", "/settings/"):
+            self._send(200, SETTINGS_HTML.encode("utf-8"), "text/html; charset=utf-8")
+        elif path == "/admin/api/config":
+            if not authorized(self):
+                self.send_json(401, {"error": "unauthorized"})
+                return
+            self.send_json(200, config_snapshot())
         elif path == "/v1/models":
             if not authorized(self):
                 self.send_json(401, {"error": "unauthorized"})
@@ -560,9 +728,14 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json(404, {"error": "not found"})
 
     def do_POST(self) -> None:
-        path = urlparse(self.path).path
+        self._safe(self._do_post)
+
+    def _do_post(self) -> None:
+        path = self._path()
         if path == "/v1/chat/completions":
             self.handle_chat()
+        elif path == "/admin/api/config":
+            self.handle_save_config()
         elif path == "/admin/api/reload":
             if not authorized(self):
                 self.send_json(401, {"error": "unauthorized"})
@@ -626,6 +799,27 @@ class Handler(BaseHTTPRequestHandler):
                 "ms": int((time.time() - t0) * 1000),
                 "error": err_text(exc)[:300],
             })
+
+    def handle_save_config(self) -> None:
+        """设置页整页保存。"""
+        if not authorized(self):
+            self.send_json(401, {"error": "unauthorized"})
+            return
+        if not is_admin(self):
+            self.send_json(403, {"ok": False, "error": "只有 NAS 管理员能改配置"})
+            return
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+            body = json.loads(self.rfile.read(length) or b"{}")
+        except Exception:
+            self.send_json(400, {"ok": False, "error": "bad request"})
+            return
+        try:
+            snap = config_save(body)
+        except Exception as exc:                    # noqa: BLE001
+            self.send_json(400, {"ok": False, "error": str(exc)})
+            return
+        self.send_json(200, {"ok": True, **snap})
 
     def handle_set_settings(self) -> None:
         """面板里改排序策略 / 冷却 / 访问口令（写 data/settings.json）。"""
@@ -720,16 +914,7 @@ class Handler(BaseHTTPRequestHandler):
             with STATE_LOCK:
                 st = dict(STATE.get(p["name"], {}))
             u = usage.get(p["name"], {})
-            if p["type"] == "opencode":
-                source = "本地"
-            elif p["key_env"] and sec.get(p["key_env"]):
-                source = "面板"
-            elif p["key_env"] and os.getenv(p["key_env"]):
-                source = "向导"
-            elif p["api_key"]:
-                source = "配置"
-            else:
-                source = "无"
+            source = provider_key_source(p, sec)
             rows.append({
                 "name": p["name"],
                 "enabled": p["enabled"],
@@ -989,19 +1174,17 @@ class Handler(BaseHTTPRequestHandler):
             "type": "gateway_error"}})
 
 
-ADMIN_HTML = """<!doctype html>
-<html lang="zh-CN"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>DeepSeek 网关</title>
-<style>
+_CSS = """
   :root{--bg:#0e1116;--card:#161b22;--line:#232a33;--fg:#e6edf3;--dim:#8b949e;
         --ok:#3fb950;--warn:#d29922;--err:#f85149;--acc:#58a6ff}
   *{box-sizing:border-box}
   body{margin:0;background:var(--bg);color:var(--fg);
        font:14px/1.5 -apple-system,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}
-  .wrap{max-width:1220px;margin:0 auto;padding:20px 14px 56px}
+  .wrap{max-width:1280px;margin:0 auto;padding:20px 14px 56px}
   h1{font-size:17px;margin:0 0 4px}
+  h2{font-size:13px;margin:22px 0 10px;color:var(--dim);font-weight:600}
   .sub{color:var(--dim);font-size:12px}
+  a{color:var(--acc);text-decoration:none}
   .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px;margin:16px 0}
   .card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:13px}
   .card .k{color:var(--dim);font-size:12px}
@@ -1020,17 +1203,45 @@ ADMIN_HTML = """<!doctype html>
   button{background:#21262d;color:var(--fg);border:1px solid var(--line);
          border-radius:7px;padding:5px 10px;cursor:pointer;font-size:12px}
   button:hover{border-color:var(--acc)}
-  input.k{background:#0d1117;color:var(--fg);border:1px solid var(--line);
-          border-radius:7px;padding:4px 8px;font-size:12px;width:100%;max-width:180px}
-  input.k:focus{outline:none;border-color:var(--acc)}
-  .keycell{display:flex;gap:6px;align-items:center}
-  .row{display:flex;gap:10px;align-items:center;margin:12px 0;flex-wrap:wrap}
+  button.pri{background:#1f6feb;border-color:#1f6feb}
+  button.danger{color:var(--err)}
+  input,select{background:#0d1117;color:var(--fg);border:1px solid var(--line);
+       border-radius:7px;padding:5px 8px;font-size:12px;font-family:inherit}
+  input:focus,select:focus{outline:none;border-color:var(--acc)}
+  .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:12px 0}
   .err{color:var(--err);font-size:11px;max-width:260px;overflow:hidden;
        text-overflow:ellipsis;white-space:nowrap;display:inline-block}
   .nm{font-weight:600}
-</style></head><body><div class="wrap">
-  <h1>DeepSeek-V4.1-Flash 聚合网关</h1>
-  <div class="sub">一个端点 · 多上游自动切换 · 每 5 秒刷新</div>
+  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:12px}
+  .prov{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px}
+  .prov .hd{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:8px}
+  .fld{display:flex;gap:6px;align-items:center;margin:5px 0}
+  .fld>label{color:var(--dim);font-size:12px;min-width:74px;flex:none}
+  .fld>input,.fld>select{flex:1;min-width:0}
+  .keycell{display:flex;gap:6px;align-items:center}
+"""
+
+_COMMON_JS = """
+const BASE = (location.pathname.replace(/\\/(admin|settings)\\/?$/, '') || '').replace(/\\/$/, '');
+const tok = () => localStorage.getItem('gw_token') || '';
+const H = () => ({'Authorization':'Bearer '+tok(),'Content-Type':'application/json'});
+function msg(t){ const e=document.getElementById('msg'); if(e) e.textContent = t; }
+async function api(path, opts){
+  const o = Object.assign({headers:H()}, opts||{});
+  const r = await fetch(BASE + path, o);
+  if(r.status===401){ msg('未登录或口令不对'); throw new Error('unauthorized'); }
+  return r.json();
+}
+function esc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/"/g,'&quot;')
+  .replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+document.querySelectorAll('[data-nav]').forEach(a => { a.href = BASE + a.dataset.nav; });
+"""
+
+_STATUS_BODY = """
+<div class="wrap">
+  <h1>DeepSeek 网关 · 运行状态</h1>
+  <div class="sub">一个端点 · 多上游自动切换 · 每 5 秒刷新 ·
+    <a href="#" data-nav="/settings">⚙ 设置</a></div>
 
   <div class="cards">
     <div class="card"><div class="k">24h 请求数</div><div class="v" id="reqs">-</div></div>
@@ -1040,17 +1251,6 @@ ADMIN_HTML = """<!doctype html>
   </div>
 
   <div class="row">
-    <span class="sub" style="margin:0">访问口令</span>
-    <input id="setTok" type="password" class="k" placeholder="留空 = 免口令" style="max-width:150px">
-    <button onclick="clearTok()">清除</button>
-    <span class="sub" style="margin:0">策略</span>
-    <select id="setStrat" class="k" style="max-width:130px">
-      <option value="priority">稳定优先</option>
-      <option value="cheapest">省钱优先</option>
-    </select>
-    <span class="sub" style="margin:0">冷却</span>
-    <input id="setCd" type="number" class="k" min="1" max="3600" style="max-width:72px">
-    <button onclick="saveSettings()">保存设置</button>
     <button onclick="load()">刷新</button>
     <button onclick="reloadCfg()">重载配置</button>
     <span class="sub" id="msg"></span>
@@ -1060,33 +1260,23 @@ ADMIN_HTML = """<!doctype html>
     <thead><tr>
       <th>上游</th><th>状态</th><th>模型</th><th>量化</th><th>免费额度</th>
       <th>输入 $/M</th><th>输出 $/M</th><th>24h 请求</th>
-      <th>24h tokens</th><th>24h 花费</th><th>密钥</th><th>操作</th><th>最近错误</th>
+      <th>24h tokens</th><th>24h 花费</th><th>操作</th><th>最近错误</th>
     </tr></thead>
     <tbody id="tbody"></tbody>
   </table>
 </div>
-<script>
-const tok = () => localStorage.getItem('gw_token') || '';
-const H = () => ({'Authorization':'Bearer '+tok(),'Content-Type':'application/json'});
+"""
 
+_STATUS_JS = """
 async function load(){
   try{
-    const r = await fetch('/admin/api/status', {headers:H()});
-    if(r.status===401){ msg('口令不对：请在上方「访问口令」里填入正确口令，点「保存设置」'); return; }
-    const d = await r.json();
+    const d = await api('/admin/api/status');
     document.getElementById('reqs').textContent = d.total_requests_24h;
     document.getElementById('cost').textContent = '$' + d.total_cost_24h.toFixed(4);
     document.getElementById('live').textContent =
       d.providers.filter(p=>p.enabled&&p.has_key&&p.cooldown===0&&!p.exhausted).length
       + ' / ' + d.providers.length;
     document.getElementById('strat').textContent = d.strategy;
-    if(!inited){
-      document.getElementById('setStrat').value = d.strategy;
-      document.getElementById('setCd').value = d.cooldown_seconds;
-      document.getElementById('setTok').placeholder =
-        d.auth_enabled ? '已设置（留空不改）' : '留空 = 免口令';
-      inited = true;
-    }
     document.getElementById('tbody').innerHTML = d.providers.map(p=>{
       let st, cls;
       if(!p.enabled){ st='已停用'; cls='d'; }
@@ -1103,119 +1293,228 @@ async function load(){
         quota = `<span style="color:${col}">${p.used_tokens.toLocaleString()}</span>`
               + `<span class="sub"> / ${p.free_quota_tokens.toLocaleString()}</span>`;
       } else { quota = '<span class="sub">免费(不限)</span>'; }
-      const t = p.tokens_in_24h + p.tokens_out_24h;
+      const typeTag = p.type === 'opencode' ? ' <span class="tag d">opencode</span>' : '';
       const btn = p.enabled
         ? `<button onclick="tog('${p.name}',false)">停用</button>`
         : `<button onclick="tog('${p.name}',true)">启用</button>`;
-      const btns = btn + ` <button onclick="probe('${p.name}')">自检</button>`;
-      const typeTag = p.type === 'opencode'
-        ? ' <span class="tag d">opencode</span>' : '';
       return `<tr>
-        <td><span class="nm">${p.name}</span>${typeTag}<div class="sub">${p.note||''}</div></td>
+        <td><span class="nm">${p.name}</span>${typeTag}<div class="sub">${esc(p.note||'')}</div></td>
         <td><span class="tag ${cls}">${st}</span></td>
-        <td class="mono">${p.model}</td>
+        <td class="mono">${esc(p.model)}</td>
         <td>${p.quant}</td>
         <td>${quota}</td>
         <td class="mono">${p.price_in.toFixed(4)}</td>
         <td class="mono">${p.price_out.toFixed(4)}</td>
         <td>${p.requests_24h}</td>
-        <td>${t.toLocaleString()}</td>
+        <td>${(p.tokens_in_24h+p.tokens_out_24h).toLocaleString()}</td>
         <td class="mono">$${p.cost_24h.toFixed(4)}</td>
-        <td><div class="keycell"><input id="k_${p.name}" type="password" class="k" placeholder="${p.key_source}"><button onclick="saveKey('${p.name}')">存</button></div></td>
-        <td>${btns}</td>
-        <td><span class="err" title="${(p.last_error||'').replace(/"/g,'&quot;')}">${p.last_error||'-'}</span></td>
+        <td>${btn} <button onclick="probe('${p.name}')">自检</button></td>
+        <td><span class="err" title="${esc(p.last_error)}">${esc(p.last_error)||'-'}</span></td>
       </tr>`;
     }).join('');
-  }catch(e){ document.getElementById('msg').textContent = '加载失败：'+e; }
+  }catch(e){ if(e.message!=='unauthorized') msg('加载失败：'+e.message); }
+}
+async function tog(name, enabled){
+  try{ await api('/admin/api/toggle', {method:'POST', body: JSON.stringify({name, enabled})}); }
+  catch(e){}
+  load();
+}
+async function probe(name){
+  msg('正在自检 ' + name + ' …');
+  try{
+    const d = await api('/admin/api/probe', {method:'POST', body: JSON.stringify({name})});
+    if(d.ok){ msg('[通] ' + name + '  ' + d.ms + 'ms  ' + (d.sample || '').slice(0, 80)); }
+    else { msg('[失败] ' + name + '  ' + (d.ms || 0) + 'ms  ' + (d.error || '')); }
+  }catch(e){ msg('自检失败：' + e.message); }
+  load();
+}
+async function reloadCfg(){
+  try{ const d = await api('/admin/api/reload', {method:'POST'}); msg(d.ok ? '配置已重载' : ('失败：'+d.error)); }
+  catch(e){}
+  load();
+}
+load(); setInterval(load, 5000);
+"""
+
+_SETTINGS_BODY = """
+<div class="wrap">
+  <h1>DeepSeek 网关 · 设置</h1>
+  <div class="sub">改完点「保存全部」立即生效 · <a href="#" data-nav="/admin">← 返回运行状态</a></div>
+
+  <h2>全局</h2>
+  <div class="row">
+    <span class="sub" style="margin:0">访问口令</span>
+    <input id="setTok" type="password" placeholder="留空 = 免口令" style="max-width:170px">
+    <button onclick="clearTok()">清除</button>
+    <span class="sub" style="margin:0">策略</span>
+    <select id="setStrat" style="max-width:130px">
+      <option value="priority">稳定优先</option>
+      <option value="cheapest">省钱优先</option>
+    </select>
+    <span class="sub" style="margin:0">冷却(秒)</span>
+    <input id="setCd" type="number" min="1" max="3600" style="max-width:80px">
+  </div>
+  <div class="row">
+    <span class="sub" style="margin:0">全局代理</span>
+    <input id="setProxy" placeholder="http://192.168.1.10:7890（留空 = 不用代理）" style="flex:1;min-width:280px">
+  </div>
+
+  <div class="row">
+    <button class="pri" onclick="save()">保存全部</button>
+    <button onclick="addProv()">+ 新增上游</button>
+    <button onclick="loadCfg()">重新载入</button>
+    <span class="sub" id="msg"></span>
+  </div>
+
+  <h2>上游（每张卡片可单独配接口 / 模型 / 代理 / 密钥）</h2>
+  <div class="grid" id="grid"></div>
+</div>
+"""
+
+_SETTINGS_JS = """
+let CFG = null;
+
+function fld(label, inner){ return `<div class="fld"><label>${label}</label>${inner}</div>`; }
+
+function provCard(p, i){
+  const link = p.console_url
+    ? `<a href="${esc(p.console_url)}" target="_blank" rel="noopener">去获取 Key ↗</a>` : '';
+  return `<div class="prov" data-i="${i}">
+    <div class="hd"><span class="nm">${esc(p.name)}</span><span>${link}</span></div>
+    ${fld('启用', `<input type="checkbox" data-f="enabled" ${p.enabled?'checked':''}>`)}
+    ${fld('类型', `<select data-f="type">
+        <option value="http" ${p.type!=='opencode'?'selected':''}>http（OpenAI 兼容）</option>
+        <option value="opencode" ${p.type==='opencode'?'selected':''}>opencode（本地 server）</option>
+      </select>`)}
+    ${fld('接口', `<input data-f="base_url" value="${esc(p.base_url)}">`)}
+    ${fld('模型', `<input data-f="model" value="${esc(p.model)}">`)}
+    ${fld('校验串', `<input data-f="model_contains" value="${esc(p.model_contains)}" placeholder="留空 = 不校验">`)}
+    ${fld('优先级', `<input type="number" data-f="priority" value="${p.priority||100}">`)}
+    ${fld('免费额度', `<input type="checkbox" data-f="free_only" ${p.free_only?'checked':''}>
+        <input type="number" data-f="free_quota_tokens" value="${p.free_quota_tokens||0}" placeholder="tokens，0=不限">`)}
+    ${fld('价格/M', `<input type="number" step="0.0001" data-f="price_in" value="${p.price_in||0}" placeholder="输入">
+        <input type="number" step="0.0001" data-f="price_out" value="${p.price_out||0}" placeholder="输出">`)}
+    ${fld('代理', `<input data-f="proxy" value="${esc(p.proxy)}" placeholder="留空 = 用全局">`)}
+    ${fld('Key 变量', `<input data-f="api_key_env" value="${esc(p.api_key_env)}" placeholder="环境变量名">`)}
+    ${fld('Key', `<input type="password" class="kval" data-env="${esc(p.api_key_env)}"
+        placeholder="${esc(p._key_source||'无')}">`)}
+    ${fld('控制台', `<input data-f="console_url" value="${esc(p.console_url)}" placeholder="获取 Key 的页面">`)}
+    ${fld('备注', `<input data-f="note" value="${esc(p.note)}">`)}
+    <div class="fld"><label></label>
+      <button onclick="probeOne('${esc(p.name)}')">自检</button>
+      <button class="danger" onclick="delProv(${i})">删除</button></div>
+  </div>`;
 }
 
-function msg(t){ document.getElementById('msg').textContent = t; }
+function render(){
+  document.getElementById('grid').innerHTML = CFG.providers.map(provCard).join('');
+  document.getElementById('setStrat').value = CFG.strategy;
+  document.getElementById('setCd').value = CFG.cooldown_seconds;
+  document.getElementById('setProxy').value = CFG.proxy || '';
+  document.getElementById('setTok').placeholder =
+    CFG.auth_enabled ? '已设置（留空不改）' : '留空 = 免口令';
+}
 
-let inited = false;
+async function loadCfg(){
+  try{
+    CFG = await api('/admin/api/config');
+    if(!CFG.providers) CFG.providers = [];
+    render();
+  }catch(e){ if(e.message!=='unauthorized') msg('载入失败：'+e.message); }
+}
 
-async function saveSettings(){
-  const tok = (document.getElementById('setTok').value || '').trim();
+function collect(){
+  const providers = [...document.querySelectorAll('.prov')].map(el=>{
+    const o = {};
+    el.querySelectorAll('[data-f]').forEach(inp=>{
+      const f = inp.dataset.f;
+      if(inp.type==='checkbox') o[f] = inp.checked;
+      else if(inp.type==='number') o[f] = inp.value==='' ? 0 : Number(inp.value);
+      else o[f] = inp.value;
+    });
+    const src = CFG.providers[Number(el.dataset.i)];
+    o._source = (src && src._source) || 'main';
+    return o;
+  });
+  const secrets = {};
+  document.querySelectorAll('.kval').forEach(inp=>{
+    const v = (inp.value||'').trim(), env = inp.dataset.env;
+    if(v && env) secrets[env] = v;
+  });
   const body = {
     strategy: document.getElementById('setStrat').value,
-    cooldown_seconds: parseInt(document.getElementById('setCd').value || '60', 10)
+    cooldown_seconds: Number(document.getElementById('setCd').value || 60),
+    proxy: document.getElementById('setProxy').value,
+    providers: providers,
+    secrets: secrets
   };
-  if(tok) body.gateway_token = tok;
+  const t = (document.getElementById('setTok').value || '').trim();
+  if(t) body.gateway_token = t;
+  return body;
+}
+
+async function save(){
+  msg('保存中…');
   try{
-    const r = await fetch('/admin/api/set-settings', {method:'POST', headers:H(),
-      body: JSON.stringify(body)});
-    const d = await r.json();
+    const d = await api('/admin/api/config', {method:'POST', body: JSON.stringify(collect())});
     if(d.ok){
-      if(tok) localStorage.setItem('gw_token', tok);
+      CFG = d; render();
       document.getElementById('setTok').value = '';
-      msg('设置已保存：策略 ' + d.strategy + '，冷却 ' + d.cooldown_seconds + 's'
-          + (d.auth_enabled ? '，口令已启用' : '，未设口令'));
+      msg('已保存并生效');
     } else { msg('保存失败：' + (d.error || '未知错误')); }
-  }catch(e){ msg('保存失败：' + e); }
-  load();
+  }catch(e){ msg('保存失败：' + e.message); }
+}
+
+function addProv(){
+  CFG.providers.push({
+    name: 'new-provider-' + (CFG.providers.length + 1), type: 'http', enabled: false,
+    priority: 100, base_url: 'https://api.example.com/v1', model: '',
+    model_contains: '', free_only: true, free_quota_tokens: 0,
+    price_in: 0, price_out: 0, proxy: '', console_url: '', note: '',
+    api_key_env: 'NEW_PROVIDER_KEY', _source: 'main', _key_source: '无'
+  });
+  render();
+}
+
+function delProv(i){
+  CFG.providers.splice(i, 1);
+  render();
+  msg('已从列表移除，点「保存全部」才会真正写盘');
+}
+
+async function probeOne(name){
+  msg('正在自检 ' + name + ' …');
+  try{
+    const d = await api('/admin/api/probe', {method:'POST', body: JSON.stringify({name})});
+    msg(d.ok ? ('[通] ' + name + '  ' + d.ms + 'ms  ' + (d.sample||'').slice(0,60))
+             : ('[失败] ' + (d.error||'')));
+  }catch(e){ msg('自检失败：' + e.message); }
 }
 
 async function clearTok(){
-  try{
-    const r = await fetch('/admin/api/set-settings', {method:'POST', headers:H(),
-      body: JSON.stringify({gateway_token: ''})});
-    const d = await r.json();
-    if(d.ok){ localStorage.removeItem('gw_token'); msg('已清除访问口令（局域网免口令）'); }
-    else { msg('失败：' + (d.error || '')); }
-  }catch(e){ msg('失败：' + e); }
-  load();
+  try{ await api('/admin/api/set-settings', {method:'POST', body: JSON.stringify({gateway_token:''})});
+       localStorage.removeItem('gw_token'); msg('已清除访问口令'); }
+  catch(e){ msg('失败：' + e.message); }
+  loadCfg();
 }
 
-async function saveKey(name){
-  const el = document.getElementById('k_' + name);
-  const v = (el.value || '').trim();
-  try{
-    const r = await fetch('/admin/api/set-key', {method:'POST', headers:H(),
-      body: JSON.stringify({name, key: v})});
-    const d = await r.json();
-    if(d.ok){
-      el.value = '';
-      msg(v ? ('已保存 ' + name + '（来源：' + d.source + '）')
-            : ('已清空 ' + name + ' 的密钥'));
-    } else {
-      msg('保存失败：' + (d.error || '未知错误'));
-    }
-  }catch(e){ msg('保存请求失败：' + e); }
-  load();
-}
+loadCfg();
+"""
 
-async function reloadCfg(){
-  const r = await fetch('/admin/api/reload', {method:'POST', headers:H()});
-  const d = await r.json();
-  document.getElementById('msg').textContent = d.ok ? '配置已重载' : ('失败：'+d.error);
-  load();
-}
 
-async function tog(name, enabled){
-  const r = await fetch('/admin/api/toggle', {method:'POST', headers:H(),
-    body: JSON.stringify({name, enabled})});
-  const d = await r.json();
-  if(!d.ok) document.getElementById('msg').textContent = '操作失败：' + d.error;
-  load();
-}
+def _page(title: str, body: str, script: str) -> str:
+    """拼一个页面。注意：不能用 f-string，页面里的 ${...} 是 JS 模板串。"""
+    return (
+        '<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">'
+        '<meta name="viewport" content="width=device-width,initial-scale=1">'
+        '<title>' + title + '</title><style>' + _CSS + '</style></head><body>'
+        + body + '<script>' + _COMMON_JS + script + '</script>'
+        '</body></html>'
+    )
 
-async function probe(name){
-  const el = document.getElementById('msg');
-  el.textContent = '正在自检 ' + name + ' …';
-  try{
-    const r = await fetch('/admin/api/probe', {method:'POST', headers:H(),
-      body: JSON.stringify({name})});
-    const d = await r.json();
-    if(d.ok){
-      el.textContent = '[通] ' + name + '  ' + d.ms + 'ms  ' + (d.sample || '').slice(0, 80);
-    } else {
-      el.textContent = '[失败] ' + name + '  ' + (d.ms || 0) + 'ms  ' + (d.error || '');
-    }
-  }catch(e){ el.textContent = '自检请求失败：' + e; }
-  load();
-}
 
-load(); setInterval(load, 5000);
-</script></body></html>"""
+STATUS_HTML = _page("DeepSeek 网关 · 状态", _STATUS_BODY, _STATUS_JS)
+SETTINGS_HTML = _page("DeepSeek 网关 · 设置", _SETTINGS_BODY, _SETTINGS_JS)
 
 
 def main() -> int:
@@ -1229,9 +1528,34 @@ def main() -> int:
         print(f"[gateway] 监听 {HOST}:{PORT} 失败：{exc}", flush=True)
         return 1
     srv.daemon_threads = True
+    srv.is_gateway = False
+
+    # 统一网关：监听 Unix Socket，飞牛校验 NAS 登录态后转发（免口令单点登录）
+    sock_srv = None
+    if SOCKET_PATH and hasattr(socket, "AF_UNIX"):
+        try:
+            if os.path.exists(SOCKET_PATH):
+                os.unlink(SOCKET_PATH)
+
+            class _UnixServer(socketserver.ThreadingUnixStreamServer):
+                daemon_threads = True
+                is_gateway = True
+
+            sock_srv = _UnixServer(SOCKET_PATH, Handler)
+            try:
+                os.chmod(SOCKET_PATH, 0o660)
+            except Exception:
+                pass
+            threading.Thread(target=sock_srv.serve_forever, daemon=True).start()
+            print(f"[gateway] 统一网关 socket：{SOCKET_PATH}", flush=True)
+        except Exception as exc:                    # noqa: BLE001
+            print(f"[gateway] 统一网关 socket 启动失败（不影响端口访问）：{exc}", flush=True)
+            sock_srv = None
 
     def _shutdown(signum, frame):        # noqa: ARG001
-        threading.Thread(target=srv.shutdown, daemon=True).start()
+        for _s in (srv, sock_srv):
+            if _s is not None:
+                threading.Thread(target=_s.shutdown, daemon=True).start()
 
     signal.signal(signal.SIGTERM, _shutdown)
     signal.signal(signal.SIGINT, _shutdown)
@@ -1243,6 +1567,8 @@ def main() -> int:
         srv.serve_forever()
     finally:
         srv.server_close()
+        if sock_srv is not None:
+            sock_srv.server_close()
         print("[gateway] 已退出", flush=True)
     return 0
 
