@@ -70,7 +70,7 @@ jobs:
           # 兜底：万一还有缓存，别打进包
           find ".build/$APPNAME" -name '__pycache__' -type d -prune -exec rm -rf {} + 2>/dev/null || true
           find ".build/$APPNAME" -name '*.pyc' -delete 2>/dev/null || true
-          chmod +x ".build/$APPNAME"/cmd/* ".build/$APPNAME"/app/service.sh ".build/$APPNAME"/app/opencode-serve.sh ".build/$APPNAME"/app/install-opencode.sh
+          chmod +x ".build/$APPNAME"/cmd/* ".build/$APPNAME"/app/service.sh ".build/$APPNAME"/app/install-opencode.sh
 
           ./fnpack build --directory ".build/$APPNAME"
 
