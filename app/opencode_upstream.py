@@ -27,6 +27,20 @@ class OpenCodeError(Exception):
     """OpenCode server 调用失败。"""
 
 
+_MODEL_CACHE: dict = {}
+
+
+def _cache_get(key: str, ttl: float = 60.0):
+    hit = _MODEL_CACHE.get(key)
+    if hit and time.time() - hit[0] < ttl:
+        return hit[1]
+    return None
+
+
+def _cache_put(key: str, val):
+    _MODEL_CACHE[key] = (time.time(), val)
+
+
 class OpenCodeClient:
     def __init__(self, base_url: str, model_id: str = "",
                  provider_id: str = "opencode", agent: str = "",
@@ -76,6 +90,7 @@ class OpenCodeClient:
     # ---- 对外：一次对话 ----
     def chat(self, prompt: str) -> dict:
         """建会话 → 发消息 → 删会话，返回 OpenAI 形状的 dict。"""
+        self.ensure_model()
         sid = ""
         try:
             session = self._req("POST", "/session", {"title": "gateway"})
@@ -109,6 +124,41 @@ class OpenCodeClient:
                     self._req("DELETE", f"/session/{sid}")
                 except Exception:
                     pass
+
+    def available_models(self) -> list:
+        """这个 provider 下有哪些模型（带 60s 缓存）。"""
+        key = self.base + "|" + self.provider_id
+        hit = _cache_get(key)
+        if hit is not None:
+            return hit
+        data = self._req("GET", "/config/providers")
+        models: list = []
+        provs = data.get("providers") or data.get("all") or [] if isinstance(data, dict) else []
+        for p in provs:
+            if not isinstance(p, dict):
+                continue
+            pid = p.get("id") or p.get("providerID")
+            if pid and pid != self.provider_id:
+                continue
+            m = p.get("models") or {}
+            models = list(m.keys()) if isinstance(m, dict) else list(m)
+            if models:
+                break
+        _cache_put(key, models)
+        return models
+
+    def ensure_model(self) -> None:
+        """发请求前确认模型存在，否则给一条能直接照做的错误。"""
+        if not self.model_id:
+            return
+        try:
+            models = self.available_models()
+        except OpenCodeError:
+            return                      # 拿不到列表就不拦，让真正的错误暴露
+        if models and self.model_id not in models:
+            raise OpenCodeError(
+                "模型 %s 不在 OpenCode 的可用列表里。当前可用：%s"
+                % (self.model_id, ", ".join(models[:8])))
 
     # ---- 诊断：把 server 的真实情况拉回来 ----
     def diagnose(self) -> dict:
