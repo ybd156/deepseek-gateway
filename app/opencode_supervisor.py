@@ -315,6 +315,11 @@ class OpenCodeSupervisor:
         if not bin_path:
             return False, "没找到 opencode，先点「一键安装」"
         _, ws, env = self.cli_context()
+        # NO_PROXY_LOGIN：登录走直连，避免代理抖动导致 Transport error
+        for _k in ('HTTP_PROXY', 'HTTPS_PROXY', 'http_proxy', 'https_proxy',
+                   'ALL_PROXY', 'all_proxy'):
+            env.pop(_k, None)
+        env['NO_PROXY'] = '*'
         log_path = self.login_log_path()
         try:
             with open(log_path, "w", encoding="utf-8") as fh:
@@ -334,6 +339,15 @@ class OpenCodeSupervisor:
         if pty is not None:
             try:
                 master, slave = pty.openpty()
+                try:
+                    import fcntl as _fcntl
+                    import struct as _struct
+                    import termios as _termios
+                    _ws = _struct.pack('HHHH', 45, 160, 0, 0)
+                    _fcntl.ioctl(master, _termios.TIOCSWINSZ, _ws)
+                    _fcntl.ioctl(slave, _termios.TIOCSWINSZ, _ws)
+                except Exception:
+                    pass
                 proc = subprocess.Popen(cmd, stdin=slave, stdout=slave,
                                         stderr=slave, env=env, cwd=ws,
                                         start_new_session=True)
