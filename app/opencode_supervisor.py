@@ -66,26 +66,46 @@ class OpenCodeSupervisor:
     # ── 路径与探活 ──
     @property
     def private_bin(self) -> str:
-        return os.path.join(self.data_dir, "npm", "bin", "opencode")
+        base = os.path.join(self.data_dir, "npm", "bin")
+        for n in ("opencode2", "opencode"):
+            p = os.path.join(base, n)
+            if os.path.exists(p):
+                return p
+        return os.path.join(base, "opencode2")
+
+    # v2（@opencode/cli）装出来的可执行文件叫 opencode2，v1（opencode-ai）叫 opencode
+    BIN_NAMES = ("opencode2", "opencode")
+
+    def _private_bins(self) -> list:
+        base = os.path.join(self.data_dir, "npm", "bin")
+        return [os.path.join(base, n) for n in self.BIN_NAMES]
 
     def resolve_bin(self) -> str:
         opts = self.get_opts() or {}
         cand = str(opts.get("bin") or "").strip()
         if cand and os.path.exists(cand):
             return cand
-        if os.path.exists(self.private_bin):
-            return self.private_bin
-        return self.which("opencode")
+        # 应用内安装的优先（新版在前）
+        for p in self._private_bins():
+            if os.path.exists(p):
+                return p
+        for n in self.BIN_NAMES:
+            hit = self.which(n)
+            if hit:
+                return hit
+        return ""
 
     def bin_source(self) -> str:
         opts = self.get_opts() or {}
         cand = str(opts.get("bin") or "").strip()
         if cand and os.path.exists(cand):
             return "手动指定"
-        if os.path.exists(self.private_bin):
-            return "应用内安装"
-        if self.which("opencode"):
-            return "系统"
+        for p in self._private_bins():
+            if os.path.exists(p):
+                return "应用内安装"
+        for n in self.BIN_NAMES:
+            if self.which(n):
+                return "系统"
         return "无"
 
     def port_open(self) -> bool:
@@ -333,9 +353,18 @@ class OpenCodeSupervisor:
                                      stdout=log, stderr=subprocess.STDOUT)
             if rc != 0:
                 return False, f"安装脚本退出码 {rc}，看日志"
-            if not os.path.exists(self.private_bin):
-                return False, "安装完成但没找到 opencode，看日志"
-            return True, "安装完成"
+            found = ""
+            for n in self.BIN_NAMES:
+                p = os.path.join(self.data_dir, "npm", "bin", n)
+                if os.path.exists(p):
+                    found = p
+                    break
+            if not found:
+                return False, "安装完成但没找到 opencode2/opencode，看日志"
+            ver = self._version(found)
+            self._ver_cache.pop(found + "-v", None)
+            ver = self._version(found)
+            return True, f"安装完成：{os.path.basename(found)} {ver}".strip()
         except Exception as exc:                    # noqa: BLE001
             return False, f"安装失败：{exc}"
 
