@@ -1,5 +1,5 @@
 appname=deepseek-gateway
-version=2.5.7
+version=2.5.8
 display_name=DeepSeek 网关
 desc=把火山方舟、硅基流动、OpenRouter、腾讯 TokenHub、百度千帆、DeepSeek 官方等多个上游聚合成一个 OpenAI 兼容端点。<br>默认只启用免费上游，付费一律关闭；免费额度用尽自动停用，绝不静默转付费。<br>纯 Python 标准库实现，不依赖 Docker 与任何第三方包。
 source=thirdparty
@@ -13,4 +13,4 @@ desktop_applaunchname=deepseek-gateway.main
 service_port=18787
 checkport=true
 ctl_stop=true
-changelog=2.5.7：OpenCode 页与卡片明确写出免费模型的限制——官方限定「只在 OpenCode 内使用」，API/CLI 会被限流；v1 已不支持免费模型，需 v2（opencode2）。避免再有人在这条路上耗时间。2.5.6：修复 EEXIST 导致 v2 装不上。2.5.5：支持 opencode2。2.5.x：opencode 命令行方式。2.4.x：上游协议。2.3.x：日志页。1.1.0：免费优先。1.0.0：首个版本。
+changelog=2.5.8：新增 opencode-zen 上游预设——OpenCode Console 充值后用 Console API Key 走标准 OpenAI 接口（https://opencode.ai/inference/openai/v1），已预填 DeepSeek V4.1 Flash 等模型和价格；OpenCode 页把官方原文与「免费只能用客户端、API 需付费模型」写清楚。2.5.7：界面写明限制。2.5.6：修复 EEXIST。2.5.5：支持 opencode2。2.5.x：opencode CLI。2.4.x：上游协议。2.3.x：日志页。1.1.0：免费优先。1.0.0：首个版本。
