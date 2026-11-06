@@ -488,6 +488,8 @@ def main() -> int:
         check(code == 200, "读取运行时状态", str(code))
         check("installed" in ocst and "running" in ocst and "port" in ocst,
               "状态字段齐全", str(sorted(ocst))[:100])
+        check("bin_source" in ocst and "node_version" in ocst,
+              "带环境检测信息（node / bin_source）", str(ocst.get("bin_source")))
         check(ocst.get("running") is False, "当前未运行", str(ocst.get("running")))
         code, _, _ = http("POST", base + "/admin/api/opencode", {"action": "bogus"})
         check(code == 400, "非法 action 被拒绝", str(code))
