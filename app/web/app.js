@@ -1074,14 +1074,7 @@ async function loadCaps() {
       (c.rows || []).forEach(r => { checkMap[r.model] = r; });
     } catch (e) { /* 忽略 */ }
 
-    document.getElementById('capsBody').innerHTML = CAPS.map((m, i) => {
-      const ctx = m.context ? (m.context >= 1000
-        ? Math.round(m.context / 1000) + 'K' : m.context) : '-';
-      const tiers = (m.reasoning || []).join(' / ') || 'off';
-      const opts = ['off', 'low', 'medium', 'high', 'max'].map(t => {
-        const sel = (m.override && m.override.effort === t) ? ' selected' : '';
-        return '<option value="' + t + '"' + sel + '>' + t + '</option>';
-      }).join('');
+    document.getElementById('capsBody').innerHTML = CAPS.map((m) => {
       const chk = checkMap[m.model] || {};
       const usable = chk.usable !== false;
       const srcMap = {
@@ -1089,25 +1082,30 @@ async function loadCaps() {
         builtin: ['内置', 'y'], guess: ['未知', 'r']
       };
       const sv = srcMap[m.source] || srcMap.guess;
+      const tiers = (m.reasoning || []).join(' / ') || 'off';
+      const opts = ['off', 'low', 'medium', 'high', 'max'].map(t => {
+        const sel = (m.override && m.override.effort === t) ? ' selected' : '';
+        return '<option value="' + t + '"' + sel + '>' + t + '</option>';
+      }).join('');
       return '<tr>'
-        + '<td class="mono clip" title="' + esc(m.model) + '">' + esc(m.model) + '</td>'
-        + '<td class="sub">' + esc(m.provider) + '</td>'
-        + '<td><span class="tag ' + (usable ? 'g' : 'r') + '">'
+        + '<td class="mono c-model" title="' + esc(m.model) + '">' + esc(m.model) + '</td>'
+        + '<td class="sub nowrap">' + esc(m.provider) + '</td>'
+        + '<td class="nowrap"><span class="tag ' + (usable ? 'g' : 'r') + '">'
         + (usable ? '可用' : '不可用') + '</span>'
         + (usable ? '' : '<div class="sub">' + esc(chk.reason || '') + '</div>')
         + '</td>'
-        + '<td><span class="tag ' + sv[1] + '">' + sv[0] + '</span></td>'
+        + '<td class="nowrap"><span class="tag ' + sv[1] + '">' + sv[0] + '</span></td>'
         + '<td><input class="capin" type="number" value="' + (m.context || '')
         + '" data-m="' + esc(m.model) + '" data-k="context"></td>'
         + '<td><input class="capin" type="number" value="' + (m.max_output || '')
         + '" data-m="' + esc(m.model) + '" data-k="max_output"></td>'
-        + '<td><input type="checkbox"' + (m.vision ? ' checked' : '')
+        + '<td class="c-v"><input type="checkbox"' + (m.vision ? ' checked' : '')
         + ' data-m="' + esc(m.model) + '" data-k="vision"></td>'
-        + '<td class="sub">' + esc(tiers) + '</td>'
-        + '<td><select class="capin" data-m="' + esc(m.model) + '" data-k="effort">'
-        + '<option value="">跟随默认</option>' + opts + '</select></td>'
+        + '<td><select class="capsel" data-m="' + esc(m.model) + '" data-k="effort">'
+        + '<option value="">跟随默认</option>' + opts + '</select>'
+        + '<div class="taglist" title="支持的档位">' + esc(tiers) + '</div></td>'
         + '</tr>';
-    }).join('') || '<tr><td colspan="9" class="sub">还没有模型</td></tr>';
+    }).join('') || '<tr><td colspan="8" class="sub">还没有模型</td></tr>';
   } catch (e) { msg('Models', '读取失败：' + e.message); }
 }
 
@@ -1171,8 +1169,14 @@ async function refreshCaps() {
   try {
     const d = await api('/admin/api/refresh-caps', { method: 'POST', body: '{}' });
     if (d.ok) {
-      msg('Models', '探测完成：更新 ' + d.updated + ' 个模型'
-        + (d.failed && d.failed.length ? '，问不到：' + d.failed.join('、') : ''));
+      let txt = '探测完成：更新 ' + d.updated + ' 个模型';
+      if (d.skipped && d.skipped.length) {
+        txt += '；跳过（这类上游不提供元数据，用内置表）：' + d.skipped.join('、');
+      }
+      if (d.failed && d.failed.length) {
+        txt += '；问不到：' + d.failed.join('、');
+      }
+      msg('Models', txt);
       loadCaps();
     } else msg('Models', '探测失败：' + (d.error || ''));
   } catch (e) { msg('Models', '探测失败：' + e.message); }
