@@ -1033,6 +1033,22 @@ def main() -> int:
             check(d11.get("ok") is True and "CLI-PONG" in str(d11.get("sample")),
                   "cli 模式跑通并回传输出", str(d11.get("sample"))[:100])
 
+        print("== 31. 登录输出清理与链接提取 ==")
+        esc = chr(27)
+        messy = ((esc + "[2m" + esc + "[36m|" + esc + "[39m" + chr(10)) * 3
+                 + "Open https://opencode.ai/auth/device?code=ABCD-1234 to approve" + chr(10)
+                 + esc + "[22m done" + chr(10))
+        with open(os.path.join(data_dir, "opencode-login.log"), "w",
+                  encoding="utf-8") as fh:
+            fh.write(messy)
+        code, _, txt = http("POST", base + "/admin/api/opencode", {"action": "login-log"})
+        d12 = json.loads(txt) if code == 200 else {}
+        urls = d12.get("login_urls") or []
+        check(code == 200 and any("opencode.ai/auth/device" in u for u in urls),
+              "从 TUI 输出里提取出授权链接", str(urls)[:100])
+        check(esc not in str(d12.get("login_log")), "日志里不再有 ANSI 转义",
+              str(d12.get("login_log"))[:60])
+
     finally:
         proc.terminate()
         try:
