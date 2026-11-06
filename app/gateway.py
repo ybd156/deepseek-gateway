@@ -343,7 +343,8 @@ def config_save(body: dict) -> dict:
             continue
         name = str(raw.get("name") or "").strip()
         if not name:
-            raise ValueError("每个上游都必须有 name")
+            raise ValueError("第 %d 个上游缺少 name（可能是页面上有非上游卡片被收集进来了）"
+                             % (len(groups.get("main", [])) + 1))
         item = {k: v for k, v in raw.items() if not str(k).startswith("_")}
         item["name"] = name
         item.setdefault("base_url", "")
@@ -1802,7 +1803,7 @@ function fld(label, inner){ return `<div class="fld"><label>${label}</label>${in
 function provCard(p, i){
   const link = p.console_url
     ? `<a href="${esc(p.console_url)}" target="_blank" rel="noopener">去获取 Key ↗</a>` : '';
-  return `<div class="prov" data-i="${i}">
+  return `<div class="prov provcard" data-i="${i}">
     <div class="hd"><input data-f="name" value="${esc(p.name)}" style="font-weight:600;flex:1">
       <span>${link}</span></div>
     ${fld('启用', `<input type="checkbox" data-f="enabled" ${p.enabled?'checked':''}>`)}
@@ -1858,7 +1859,7 @@ async function loadCfg(){
 }
 
 function collect(){
-  const providers = [...document.querySelectorAll('.prov')].map(el=>{
+  const providers = [...document.querySelectorAll('.provcard')].map(el=>{
     const o = {};
     el.querySelectorAll('[data-f]').forEach(inp=>{
       const f = inp.dataset.f;
@@ -1871,7 +1872,7 @@ function collect(){
     return o;
   });
   const secrets = {};
-  document.querySelectorAll('.kval').forEach(inp=>{
+  document.querySelectorAll('.provcard .kval').forEach(inp=>{
     const v = (inp.value||'').trim(), env = inp.dataset.env;
     if(v && env) secrets[env] = v;
   });
@@ -1896,6 +1897,21 @@ function collect(){
 }
 
 async function save(){
+  // 提交前自检，避免后端整页拒绝
+  const cards = [...document.querySelectorAll('.provcard')];
+  const names = cards.map(el => {
+    const inp = el.querySelector('[data-f="name"]');
+    return inp ? (inp.value || '').trim() : '';
+  });
+  if(names.some(n => !n)){
+    msg('有上游的「名称」是空的，先填上再保存（第 ' + (names.indexOf('') + 1) + ' 张卡片）');
+    return;
+  }
+  const dup = names.filter((n, i) => names.indexOf(n) !== i);
+  if(dup.length){
+    msg('上游名称重复：' + dup.join(', ') + ' —— 名称必须唯一');
+    return;
+  }
   msg('保存中…');
   try{
     const d = await api('/admin/api/config', {method:'POST', body: JSON.stringify(collect())});
