@@ -79,10 +79,34 @@ class Upstream(BaseHTTPRequestHandler):
             self.send_header("Content-Length", "0")
             self.end_headers()
 
+    def _send_json(self, obj):
+        data = json.dumps(obj, ensure_ascii=False).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
     def do_POST(self):
         length = int(self.headers.get("Content-Length") or 0)
         body = json.loads(self.rfile.read(length) or b"{}")
         echo = body.get("model") or MODEL
+        path = self.path.rstrip("/")
+        if path.endswith("/responses"):
+            self._send_json({"id": "resp_1", "output": [{"type": "message", "content": [
+                {"type": "output_text", "text": "resp-pong"}]}],
+                "usage": {"input_tokens": 5, "output_tokens": 3}})
+            return
+        if path.endswith("/messages"):
+            self._send_json({"id": "msg_1",
+                             "content": [{"type": "text", "text": "claude-pong"}],
+                             "usage": {"input_tokens": 6, "output_tokens": 2}})
+            return
+        if ":generateContent" in path:
+            self._send_json({"candidates": [{"content": {"parts": [
+                {"text": "gemini-pong"}]}}],
+                "usageMetadata": {"promptTokenCount": 7, "candidatesTokenCount": 4}})
+            return
         if body.get("stream"):
             self.send_response(200)
             self.send_header("Content-Type", "text/event-stream")
@@ -928,6 +952,34 @@ def main() -> int:
         for pp in cfg6["providers"]:
             pp["enabled"] = True
         http("POST", base + "/admin/api/config", cfg6)
+
+        print("== 27. OpenCode「试一句」==")
+        http("POST", base + "/admin/api/set-settings", {"opencode_port": OC_PORT})
+        code, _, txt = http("POST", base + "/admin/api/opencode", {"action": "ping"})
+        pg = json.loads(txt) if code == 200 else {}
+        check(code == 200 and pg.get("ok") is True, "试一句成功",
+              str(pg.get("message"))[:120])
+        check("试通了" in str(pg.get("message")), "返回内容回显", str(pg.get("message"))[:80])
+
+        print("== 28. 三种上游协议（Responses / Anthropic / Gemini）==")
+        specs = [("proto-responses", "responses", "resp-pong"),
+                 ("proto-anthropic", "anthropic", "claude-pong"),
+                 ("proto-gemini", "gemini", "gemini-pong")]
+        for nm, proto, _w in specs:
+            with open(os.path.join(pd, nm + ".json"), "w", encoding="utf-8") as fh:
+                json.dump({"providers": [{
+                    "name": nm, "type": "http", "protocol": proto, "enabled": False,
+                    "priority": 90, "base_url": f"http://127.0.0.1:{UP_PORT}",
+                    "model": "proto-model", "api_key": "k", "timeout": 10,
+                    "free_only": True, "free_quota_tokens": 0,
+                    "price_in": 0, "price_out": 0,
+                }]}, fh, ensure_ascii=False)
+        http("POST", base + "/admin/api/reload", {})
+        for nm, proto, want in specs:
+            code, _, txt = http("POST", base + "/admin/api/probe", {"name": nm})
+            d9 = json.loads(txt) if code == 200 else {}
+            check(d9.get("ok") is True and want in str(d9.get("sample")),
+                  f"{proto} 协议调通并转成 OpenAI 形状", str(d9.get("sample"))[:80])
 
     finally:
         proc.terminate()
