@@ -719,8 +719,8 @@ def load_config() -> None:
             if p["type"] == "opencode":
                 if not p.get("opencode_agent"):
                     p["opencode_agent"] = "plan"     # build 会自己循环到超时
-                if int(p.get("timeout") or 0) <= 180:
-                    p["timeout"] = 300
+                if not p.get("timeout"):        # 只在没显式配过时兜底
+                    p["timeout"] = 150
 
         PROVIDERS = items
         with STATE_LOCK:
@@ -981,6 +981,26 @@ def render_prompt(payload: dict) -> str:
     return "\n\n".join(out)
 
 
+def opencode_log_error_hint(lines: int = 60) -> str:
+    """从 opencode 自己的日志里摘出最后一条错误原因。"""
+    try:
+        tail = SUPERVISOR.own_logs(lines)
+    except Exception:
+        return ""
+    hits = [ln for ln in tail.splitlines()
+            if "ERROR" in ln or "error.error=" in ln]
+    if not hits:
+        return ""
+    line = hits[-1]
+    key = 'error.error="'
+    i = line.find(key)
+    if i >= 0:
+        rest = line[i + len(key):]
+        j = rest.find('"')
+        return (rest[:j] if j > 0 else rest[:300]).strip()
+    return line.strip()[-300:]
+
+
 def _split_messages(payload: dict) -> tuple:
     """OpenAI messages → (system 文本, [{role, content}])"""
     system, msgs = [], []
@@ -1135,7 +1155,20 @@ def call_provider(p: dict, payload: dict) -> tuple[dict, str]:
         try:
             data = client.chat(render_prompt(payload))
         except OpenCodeError as exc:
-            raise ProviderError(str(exc)) from None
+            msg = str(exc)
+            if "超时" in msg or "timed out" in msg.lower() or "timeout" in msg.lower():
+                hint = opencode_log_error_hint()
+                if hint:
+                    if "usage limit" in hint.lower() or "free" in hint.lower():
+                        # 免费池被限流：别让它再拖住每一次请求，直接冷却一小时
+                        with STATE_LOCK:
+                            STATE.setdefault(p["name"], {})["cooldown_until"] = time.time() + 3600
+                        raise ProviderError(
+                            "OpenCode 免费额度已用尽（服务端原话：%s）。"
+                            "这个免费池只在 OpenCode 自己的界面里有效，无头调用会被限流；"
+                            "已把该上游冷却 1 小时。" % hint[:200]) from None
+                    msg = msg + "｜服务端报错：" + hint
+            raise ProviderError(msg) from None
         upstream = str(data.pop("_upstream_model", "") or data.get("model") or "")
         return data, check_model(p, {"model": upstream})
 
