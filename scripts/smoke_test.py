@@ -828,6 +828,22 @@ def main() -> int:
         allids = [m["id"] for m in json.loads(txt).get("data", [])]
         check("alt-model" in allids, "/v1/models 列出多模型", str(allids[:6]))
 
+        print("== 22. 验证 Key（排查 401）==")
+        code, _, txt = http("POST", base + "/admin/api/verify-key", {"key": key1})
+        v1 = json.loads(txt) if code == 200 else {}
+        check(v1.get("ok") is True and v1.get("kind") == "令牌", "有效令牌验证通过", str(v1))
+        check(v1.get("name") == "小明", "回显令牌备注", str(v1.get("name")))
+
+        masked = key1[:9] + "****" + key1[-4:]
+        code, _, txt = http("POST", base + "/admin/api/verify-key", {"key": masked})
+        v2 = json.loads(txt) if code == 200 else {}
+        check(v2.get("ok") is False and "掩码" in str(v2.get("error")),
+              "粘贴掩码时给出提示", str(v2.get("error"))[:80])
+
+        code, _, txt = http("POST", base + "/admin/api/verify-key", {"key": "sk-nope"})
+        v3 = json.loads(txt) if code == 200 else {}
+        check(v3.get("ok") is False, "无效 Key 如实报告", str(v3.get("error"))[:60])
+
     finally:
         proc.terminate()
         try:
