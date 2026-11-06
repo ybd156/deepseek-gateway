@@ -3331,6 +3331,12 @@ function ocPaint(d){
     let h = '<div class="card" style="padding:14px">';
     h += '<div style="font-weight:700;font-size:15px">' + esc(ls.title || '') + '</div>';
     h += '<div class="sub" style="margin:6px 0 0">' + esc(ls.hint || '') + '</div>';
+    if(ls.screen){
+      h += '<div class="mono" style="margin-top:8px;padding:8px 10px;background:#fafbfd;'
+         + 'border:1px solid var(--line);border-radius:8px;font-size:11px;'
+         + 'color:#374151;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'
+         + esc(ls.screen) + '</div>';
+    }
     if(ls.url){
       h += '<div class="inline" style="margin-top:10px">'
          + '<input id="ocUrl" readonly value="' + esc(ls.url) + '">'
