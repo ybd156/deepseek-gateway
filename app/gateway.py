@@ -2442,6 +2442,7 @@ def caps_payload() -> dict:
                 "model": mid,
                 "provider": p["name"],
                 "context": caps.get("context"),
+                "max_output": caps.get("max_output"),
                 "vision": bool(caps.get("vision")),
                 "reasoning": list(caps.get("reasoning") or []),
                 "known": bool(caps.get("known")),
@@ -2583,15 +2584,42 @@ def models_payload(include_all: bool = False) -> dict:
                 continue
             seen.add(key)
             caps = policy.caps_for(mid, override.get(mid))
+            ctx = int(caps.get("context") or 0)
+            maxout = int(caps.get("max_output") or 0)
+            vision = bool(caps.get("vision"))
+            tiers = list(caps.get("reasoning") or [])
+            # 同一份能力用几套常见字段名一起发，客户端认哪个都能读到
             item = {
                 "id": mid,
                 "object": "model",
                 "created": 0,
                 "owned_by": p["name"],
-                "context_length": int(caps.get("context") or 0),
+                # 上下文
+                "context_length": ctx,
+                "context_window": ctx,
+                "max_context_length": ctx,
+                # 最大输出
+                "max_output_tokens": maxout,
+                "max_tokens": maxout,
+                # 图片
+                "supports_vision": vision,
+                "vision": vision,
+                # 思考
+                "supports_reasoning": len(tiers) > 1,
+                "reasoning_efforts": tiers,
                 "capabilities": {
-                    "vision": bool(caps.get("vision")),
-                    "reasoning": list(caps.get("reasoning") or []),
+                    "vision": vision,
+                    "reasoning": tiers,
+                    "context": ctx,
+                    "max_output": maxout,
+                },
+                # NewAPI / OneAPI 风格的聚合字段
+                "model_info": {
+                    "context_size": ctx,
+                    "max_output": maxout,
+                    "support_vision": vision,
+                    "support_reasoning": len(tiers) > 1,
+                    "support_function_call": True,
                 },
             }
             if include_all:
