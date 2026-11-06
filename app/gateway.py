@@ -1579,50 +1579,79 @@ class Handler(BaseHTTPRequestHandler):
 
 
 _CSS = """
-  :root{--bg:#0e1116;--card:#161b22;--line:#232a33;--fg:#e6edf3;--dim:#8b949e;
-        --ok:#3fb950;--warn:#d29922;--err:#f85149;--acc:#58a6ff}
+  :root{--bg:#f5f7fa;--card:#fff;--line:#e5e9f0;--fg:#1f2430;--dim:#6b7280;
+        --ok:#16a34a;--warn:#d97706;--err:#dc2626;--acc:#2563eb;--soft:#eff4ff}
   *{box-sizing:border-box}
   body{margin:0;background:var(--bg);color:var(--fg);
-       font:14px/1.5 -apple-system,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}
-  .wrap{max-width:1280px;margin:0 auto;padding:20px 14px 56px}
-  h1{font-size:17px;margin:0 0 4px}
-  h2{font-size:13px;margin:22px 0 10px;color:var(--dim);font-weight:600}
+       font:14px/1.6 -apple-system,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}
+  .layout{display:flex;min-height:100vh}
+  .side{width:200px;flex:none;background:#fff;border-right:1px solid var(--line);
+        padding:18px 12px;position:sticky;top:0;height:100vh}
+  .brand{font-weight:700;font-size:15px;margin:0 6px}
+  .brand small{display:block;font-weight:400;color:var(--dim);font-size:11px;margin-top:2px}
+  .nav{margin-top:18px;display:flex;flex-direction:column;gap:2px}
+  .nav a{display:block;padding:8px 10px;border-radius:8px;color:#374151;
+         text-decoration:none;font-size:13px}
+  .nav a:hover{background:#f3f6fb}
+  .nav a.on{background:var(--soft);color:var(--acc);font-weight:600}
+  .nav .sep{margin:10px 10px 6px;font-size:11px;color:#9aa4b2}
+  .main{flex:1;min-width:0;padding:22px 26px 70px}
+  h1{font-size:19px;margin:0 0 3px}
+  h2{font-size:14px;margin:26px 0 10px;color:#111827}
   .sub{color:var(--dim);font-size:12px}
-  a{color:var(--acc);text-decoration:none}
-  .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px;margin:16px 0}
-  .card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:13px}
-  .card .k{color:var(--dim);font-size:12px}
-  .card .v{font-size:21px;font-weight:600;margin-top:3px}
-  table{width:100%;border-collapse:collapse;background:var(--card);
-        border:1px solid var(--line);border-radius:10px;overflow:hidden}
-  th,td{padding:9px 11px;text-align:left;border-bottom:1px solid var(--line);font-size:13px}
-  th{color:var(--dim);font-weight:500;font-size:12px;background:#11161d;white-space:nowrap}
-  tr:last-child td{border-bottom:none}
-  .tag{display:inline-block;padding:1px 7px;border-radius:99px;font-size:11px;white-space:nowrap}
-  .g{background:rgba(63,185,80,.15);color:var(--ok)}
-  .y{background:rgba(210,153,34,.15);color:var(--warn)}
-  .r{background:rgba(248,81,73,.15);color:var(--err)}
-  .d{background:#21262d;color:var(--dim)}
-  .mono{font-family:ui-monospace,Menlo,Consolas,monospace}
-  button{background:#21262d;color:var(--fg);border:1px solid var(--line);
-         border-radius:7px;padding:5px 10px;cursor:pointer;font-size:12px}
-  button:hover{border-color:var(--acc)}
-  button.pri{background:#1f6feb;border-color:#1f6feb}
-  button.danger{color:var(--err)}
-  input,select{background:#0d1117;color:var(--fg);border:1px solid var(--line);
-       border-radius:7px;padding:5px 8px;font-size:12px;font-family:inherit}
-  input:focus,select:focus{outline:none;border-color:var(--acc)}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;
+        padding:16px;box-shadow:0 1px 2px rgba(16,24,40,.04)}
+  .stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));
+         gap:12px;margin:16px 0}
+  .stat .k{color:var(--dim);font-size:12px}
+  .stat .v{font-size:22px;font-weight:700;margin-top:2px}
   .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:12px 0}
-  .err{color:var(--err);font-size:11px;max-width:260px;overflow:hidden;
+  .field{margin:0 0 14px}
+  .field>label{display:block;font-size:12px;color:#374151;font-weight:600;margin-bottom:5px}
+  .hint{color:var(--dim);font-size:11px;margin-top:4px;line-height:1.5}
+  .inline{display:flex;gap:8px;align-items:center}
+  .inline>input,.inline>select{flex:1;min-width:0}
+  input,select{background:#fff;color:var(--fg);border:1px solid #d5dbe5;border-radius:8px;
+        padding:7px 10px;font-size:13px;font-family:inherit;width:100%}
+  input[readonly]{background:#fafbfd}
+  input:focus,select:focus{outline:none;border-color:var(--acc);
+        box-shadow:0 0 0 3px rgba(37,99,235,.12)}
+  input[type=checkbox]{width:auto;margin:0}
+  button{background:#fff;color:#1f2430;border:1px solid #d5dbe5;border-radius:8px;
+         padding:6px 12px;cursor:pointer;font-size:12px;white-space:nowrap}
+  button:hover{border-color:var(--acc);color:var(--acc)}
+  button.pri{background:var(--acc);border-color:var(--acc);color:#fff}
+  button.pri:hover{background:#1d4ed8;color:#fff}
+  button.danger{color:var(--err);border-color:#f3c7c7}
+  button.danger:hover{border-color:var(--err)}
+  table{width:100%;border-collapse:collapse;background:#fff;border:1px solid var(--line);
+        border-radius:12px;overflow:hidden}
+  th,td{padding:10px 12px;text-align:left;border-bottom:1px solid var(--line);font-size:13px}
+  th{background:#fafbfd;color:var(--dim);font-weight:600;font-size:12px;white-space:nowrap}
+  tr:last-child td{border-bottom:none}
+  .tag{display:inline-block;padding:1px 8px;border-radius:999px;font-size:11px;white-space:nowrap}
+  .g{background:#e8f7ee;color:var(--ok)}
+  .y{background:#fef3e2;color:var(--warn)}
+  .r{background:#fdecec;color:var(--err)}
+  .d{background:#eef1f5;color:var(--dim)}
+  .mono{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px}
+  .msg{color:var(--acc);font-size:12px}
+  .err{color:var(--err);font-size:11px;max-width:240px;overflow:hidden;
        text-overflow:ellipsis;white-space:nowrap;display:inline-block}
-  .nm{font-weight:600}
-  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:12px}
-  .prov{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px}
-  .prov .hd{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:8px}
-  .fld{display:flex;gap:6px;align-items:center;margin:5px 0}
-  .fld>label{color:var(--dim);font-size:12px;min-width:74px;flex:none}
-  .fld>input,.fld>select{flex:1;min-width:0}
-  .keycell{display:flex;gap:6px;align-items:center}
+  .pgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(380px,1fr));gap:14px}
+  .provcard{background:#fff;border:1px solid var(--line);border-radius:12px;padding:14px;
+        box-shadow:0 1px 2px rgba(16,24,40,.04)}
+  .phd{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:12px}
+  .phd .nm{font-weight:700;flex:1}
+  .f2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+  .chk{display:flex;gap:6px;align-items:center;font-size:12px;color:#374151;white-space:nowrap}
+  pre{background:#0f172a;color:#e2e8f0;border-radius:10px;padding:12px;font-size:11px;
+      line-height:1.55;max-height:220px;overflow:auto;margin:10px 0 0}
+  @media (max-width:760px){
+    .side{display:none}
+    .main{padding:16px 14px 60px}
+    .f2{grid-template-columns:1fr}
+  }
 """
 
 _COMMON_JS = """
@@ -1633,7 +1662,7 @@ function msg(t){ const e=document.getElementById('msg'); if(e) e.textContent = t
 async function api(path, opts){
   const o = Object.assign({headers:H()}, opts||{});
   const r = await fetch(BASE + path, o);
-  if(r.status===401){ msg('未登录或口令不对'); throw new Error('unauthorized'); }
+  if(r.status===401){ msg('未登录或口令不对：在「设置」里填访问口令'); throw new Error('unauthorized'); }
   return r.json();
 }
 function esc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/"/g,'&quot;')
@@ -1641,58 +1670,109 @@ function esc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/"/g,
 function parseProxy(s){
   s = String(s||'').trim();
   if(!s) return {scheme:'', addr:''};
-  const m = s.match(/^([a-z0-9]+):\/\/(.*)$/i);
+  const m = s.match(/^([a-z0-9]+):\\/\\/(.*)$/i);
   if(m) return {scheme: m[1].toLowerCase(), addr: m[2]};
   return {scheme:'http', addr:s};
+}
+function copyText(txt, label){
+  const done = function(){ msg('已复制' + (label ? '：' + label : '')); };
+  const fail = function(){ msg('复制失败，请手动选中输入框复制'); };
+  const fallback = function(){
+    try{
+      const ta = document.createElement('textarea');
+      ta.value = txt;
+      ta.style.position = 'fixed'; ta.style.top = '-1000px'; ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.focus(); ta.select();
+      const ok = document.execCommand('copy');
+      document.body.removeChild(ta);
+      ok ? done() : fail();
+    }catch(e){ fail(); }
+  };
+  if(navigator.clipboard && window.isSecureContext){
+    navigator.clipboard.writeText(txt).then(done).catch(fallback);
+  } else { fallback(); }
+}
+function copyEp(id, label){
+  const el = document.getElementById(id);
+  const txt = el ? (el.value || '') : '';
+  if(!txt){ msg('这一行还没有内容'); return; }
+  copyText(txt, label);
 }
 document.querySelectorAll('[data-nav]').forEach(a => { a.href = BASE + a.dataset.nav; });
 """
 
+_SIDE = """
+  <aside class="side">
+    <div class="brand">DeepSeek 网关<small>多上游聚合 · OpenAI 兼容</small></div>
+    <nav class="nav">
+      <a data-nav="/admin" class="NAV_ADMIN">概览</a>
+      <a data-nav="/settings" class="NAV_SET">设置</a>
+      <div class="sep">快捷</div>
+      <a href="#" onclick="location.href=BASE+'/admin';return false">运行状态</a>
+      <a href="#" onclick="location.href=BASE+'/settings';return false">上游与密钥</a>
+    </nav>
+  </aside>
+"""
+
 _STATUS_BODY = """
-<div class="wrap">
-  <h1>DeepSeek 网关 · 运行状态</h1>
-  <div class="sub">一个端点 · 多上游自动切换 · 每 5 秒刷新 ·
-    <a href="#" data-nav="/settings">⚙ 设置</a></div>
+<div class="layout">
+NAV
+  <main class="main">
+    <h1>概览</h1>
+    <div class="sub">一个接口，后面挂多个上游；某个上游失败会自动换下一家。</div>
 
-  <div class="cards">
-    <div class="card"><div class="k">24h 请求数</div><div class="v" id="reqs">-</div></div>
-    <div class="card"><div class="k">24h 花费 (USD)</div><div class="v" id="cost">-</div></div>
-    <div class="card"><div class="k">可用上游</div><div class="v" id="live">-</div></div>
-    <div class="card"><div class="k">排序策略</div><div class="v" id="strat" style="font-size:15px">-</div></div>
-  </div>
-
-  <h2>接入信息（给客户端用，可直接复制）</h2>
-  <div class="prov" style="max-width:1000px">
-    <div class="fld"><label>直连（推荐）</label><input id="epDirect" readonly>
-      <button onclick="copyEp('epDirect','直连地址')">复制</button></div>
-    <div class="fld"><label>本机</label><input id="epLocal" readonly>
-      <button onclick="copyEp('epLocal','本机地址')">复制</button></div>
-    <div class="fld"><label>网关路径</label><input id="epGateway" readonly>
-      <button onclick="copyEp('epGateway','网关地址')">复制</button></div>
-    <div class="sub" style="margin:2px 0 8px">
-      ⚠ 外部客户端（Cherry Studio / OpenCode / 脚本）用「直连」；在 NAS 本机上跑的用「本机」；
-      「网关路径」需要飞牛登录态，只在本机浏览器里打开时有效。
+    <div class="stats">
+      <div class="card stat"><div class="k">24 小时请求</div><div class="v" id="reqs">-</div></div>
+      <div class="card stat"><div class="k">24 小时花费（估算）</div><div class="v" id="cost">-</div></div>
+      <div class="card stat"><div class="k">可用上游</div><div class="v" id="live">-</div></div>
+      <div class="card stat"><div class="k">当前策略</div><div class="v" id="strat" style="font-size:16px">-</div></div>
     </div>
-    <div class="fld"><label>模型名</label><input id="epModels" readonly placeholder="加载中…">
-      <button onclick="copyEp('epModels','模型名')">复制</button></div>
-    <div class="fld"><label>示例</label><input id="epCurl" readonly>
-      <button onclick="copyEp('epCurl','curl 示例')">复制</button></div>
-  </div>
 
-  <div class="row">
-    <button onclick="load()">刷新</button>
-    <button onclick="reloadCfg()">重载配置</button>
-    <span class="sub" id="msg"></span>
-  </div>
+    <h2>接入信息</h2>
+    <div class="card">
+      <div class="field"><label>直连地址 —— 外部客户端用这个</label>
+        <div class="inline"><input id="epDirect" readonly>
+          <button onclick="copyEp('epDirect','直连地址')">复制</button></div>
+        <div class="hint">Cherry Studio、OpenCode、脚本、手机 App 都用这一行。</div></div>
 
-  <table>
-    <thead><tr>
-      <th>上游</th><th>状态</th><th>模型</th><th>量化</th><th>免费额度</th>
-      <th>输入 $/M</th><th>输出 $/M</th><th>24h 请求</th>
-      <th>24h tokens</th><th>24h 花费</th><th>操作</th><th>最近错误</th>
-    </tr></thead>
-    <tbody id="tbody"></tbody>
-  </table>
+      <div class="field"><label>本机地址 —— 跑在飞牛上的程序用这个</label>
+        <div class="inline"><input id="epLocal" readonly>
+          <button onclick="copyEp('epLocal','本机地址')">复制</button></div>
+        <div class="hint">容器或定时脚本走 127.0.0.1，不绕外网、不受防火墙影响。</div></div>
+
+      <div class="field"><label>网关地址 —— 仅飞牛浏览器内可用</label>
+        <div class="inline"><input id="epGateway" readonly>
+          <button onclick="copyEp('epGateway','网关地址')">复制</button></div>
+        <div class="hint">这条路要 NAS 登录态。外部客户端用它会被挡在门外（报 did not answer with JSON）。</div></div>
+
+      <div class="field"><label>可用模型名</label>
+        <div class="inline"><input id="epModels" readonly placeholder="加载中…">
+          <button onclick="copyEp('epModels','模型名')">复制</button></div></div>
+
+      <div class="field" style="margin-bottom:0"><label>调用示例</label>
+        <div class="inline"><input id="epCurl" readonly>
+          <button onclick="copyEp('epCurl','调用示例')">复制</button></div></div>
+    </div>
+
+    <h2>上游状态</h2>
+    <div class="row">
+      <button onclick="load()">刷新</button>
+      <button onclick="reloadCfg()">重载配置</button>
+      <span class="msg" id="msg"></span>
+    </div>
+
+    <div style="overflow-x:auto">
+      <table style="min-width:1080px">
+        <thead><tr>
+          <th>上游</th><th>状态</th><th>模型</th><th>量化</th><th>免费额度</th>
+          <th>价格 $/M</th><th>24h 请求</th><th>24h tokens</th><th>花费</th>
+          <th>操作</th><th>最近错误</th>
+        </tr></thead>
+        <tbody id="tbody"></tbody>
+      </table>
+    </div>
+  </main>
 </div>
 """
 
@@ -1706,10 +1786,8 @@ async function load(){
       d.providers.filter(p=>p.enabled&&p.has_key&&p.cooldown===0&&!p.exhausted).length
       + ' / ' + d.providers.length;
     document.getElementById('strat').textContent = d.strategy;
-    if(!epInited){
-      epInited = true;
-      loadEndpoint(d.port);
-    }
+    if(!epInited){ epInited = true; loadEndpoint(d.port); }
+
     document.getElementById('tbody').innerHTML = d.providers.map(p=>{
       let st, cls;
       if(!p.enabled){ st='已停用'; cls='d'; }
@@ -1723,35 +1801,61 @@ async function load(){
       else if(p.free_quota_tokens>0){
         const pct = Math.min(100, p.used_tokens / p.free_quota_tokens * 100);
         const col = p.exhausted ? 'var(--err)' : (pct > 80 ? 'var(--warn)' : 'var(--ok)');
-        quota = `<span style="color:${col}">${p.used_tokens.toLocaleString()}</span>`
-              + `<span class="sub"> / ${p.free_quota_tokens.toLocaleString()}</span>`;
-      } else { quota = '<span class="sub">免费(不限)</span>'; }
+        quota = '<span style="color:' + col + '">' + p.used_tokens.toLocaleString() + '</span>'
+              + '<span class="sub"> / ' + p.free_quota_tokens.toLocaleString() + '</span>';
+      } else { quota = '<span class="sub">免费不限</span>'; }
       const typeTag = p.type === 'opencode' ? ' <span class="tag d">opencode</span>' : '';
       const btn = p.enabled
-        ? `<button onclick="tog('${p.name}',false)">停用</button>`
-        : `<button onclick="tog('${p.name}',true)">启用</button>`;
-      return `<tr>
-        <td><span class="nm">${p.name}</span>${typeTag}<div class="sub">${esc(p.note||'')}</div></td>
-        <td><span class="tag ${cls}">${st}</span></td>
-        <td class="mono">${esc(p.model)}</td>
-        <td>${p.quant}</td>
-        <td>${quota}</td>
-        <td class="mono">${p.price_in.toFixed(4)}</td>
-        <td class="mono">${p.price_out.toFixed(4)}</td>
-        <td>${p.requests_24h}</td>
-        <td>${(p.tokens_in_24h+p.tokens_out_24h).toLocaleString()}</td>
-        <td class="mono">$${p.cost_24h.toFixed(4)}</td>
-        <td>${btn} <button onclick="probe('${p.name}')">自检</button></td>
-        <td><span class="err" title="${esc(p.last_error)}">${esc(p.last_error)||'-'}</span></td>
-      </tr>`;
+        ? '<button onclick="tog(\\'' + p.name + '\\',false)">停用</button>'
+        : '<button onclick="tog(\\'' + p.name + '\\',true)">启用</button>';
+      return '<tr>'
+        + '<td><b>' + p.name + '</b>' + typeTag
+        + '<div class="sub">' + esc(p.note||'') + '</div></td>'
+        + '<td><span class="tag ' + cls + '">' + st + '</span></td>'
+        + '<td class="mono">' + esc(p.model) + '</td>'
+        + '<td>' + p.quant + '</td>'
+        + '<td>' + quota + '</td>'
+        + '<td class="mono">' + p.price_in.toFixed(3) + ' / ' + p.price_out.toFixed(3) + '</td>'
+        + '<td>' + p.requests_24h + '</td>'
+        + '<td>' + (p.tokens_in_24h+p.tokens_out_24h).toLocaleString() + '</td>'
+        + '<td class="mono">$' + p.cost_24h.toFixed(4) + '</td>'
+        + '<td>' + btn + ' <button onclick="probe(\\'' + p.name + '\\')">自检</button></td>'
+        + '<td><span class="err" title="' + esc(p.last_error) + '">'
+        + (esc(p.last_error) || '-') + '</span></td>'
+        + '</tr>';
     }).join('');
-  }catch(e){ if(e.message!=='unauthorized') msg('加载失败：'+e.message); }
+  }catch(e){ if(e.message !== 'unauthorized') msg('加载失败：' + e.message); }
 }
+
+async function loadEndpoint(port){
+  try{
+    const host = location.hostname;
+    const pt = port || 18787;
+    const direct = 'http://' + host + ':' + pt + '/v1';
+    document.getElementById('epDirect').value = direct;
+    document.getElementById('epLocal').value = 'http://127.0.0.1:' + pt + '/v1';
+    document.getElementById('epGateway').value = BASE
+      ? (location.origin + BASE + '/v1')
+      : '（当前就是直连访问，无需网关）';
+    const r = await fetch(BASE + '/v1/models', {headers:H()});
+    const d = await r.json();
+    const ids = (d.data || []).map(m => m.id);
+    document.getElementById('epModels').value = ids.length ? ids.join('  ,  ') : '（还没配置上游）';
+    const first = ids[0] || 'deepseek-v4.1-flash';
+    document.getElementById('epCurl').value =
+      'curl ' + direct + '/chat/completions -H "Content-Type: application/json" '
+      + '-H "Authorization: Bearer <你的Key>" -d '
+      + String.fromCharCode(39) + '{"model":"' + first
+      + '","messages":[{"role":"user","content":"hi"}]}' + String.fromCharCode(39);
+  }catch(e){}
+}
+
 async function tog(name, enabled){
   try{ await api('/admin/api/toggle', {method:'POST', body: JSON.stringify({name, enabled})}); }
   catch(e){}
   load();
 }
+
 async function probe(name){
   msg('正在自检 ' + name + ' …（最多等 60 秒）');
   const t0 = Date.now();
@@ -1763,71 +1867,17 @@ async function probe(name){
       })
     ]);
     const sec = ((Date.now() - t0) / 1000).toFixed(1);
-    if(d.ok){ msg('[通] ' + name + '  ' + sec + 's  ' + (d.sample || '').slice(0, 80)); }
+    if(d.ok){ msg('[通] ' + name + '  ' + sec + 's  ' + (d.sample || '').slice(0, 70)); }
     else { msg('[失败] ' + name + '  ' + sec + 's  ' + (d.error || '')); }
   }catch(e){ msg('[失败] ' + name + '  ' + e.message); }
   load();
 }
+
 async function reloadCfg(){
-  try{ const d = await api('/admin/api/reload', {method:'POST'}); msg(d.ok ? '配置已重载' : ('失败：'+d.error)); }
+  try{ const d = await api('/admin/api/reload', {method:'POST'});
+       msg(d.ok ? '配置已重载' : ('失败：' + d.error)); }
   catch(e){}
   load();
-}
-function copyEp(id, label){
-  const el = document.getElementById(id);
-  const txt = el ? (el.value || '') : '';
-  if(!txt){ msg('这一行还没有内容'); return; }
-  copyText(txt, label);
-}
-
-function copyText(txt, label){
-  const done = function(){ msg('已复制' + (label ? '：' + label : '')); };
-  const fail = function(){ msg('复制失败，请手动选中输入框复制'); };
-  const fallback = function(){
-    try{
-      const ta = document.createElement('textarea');
-      ta.value = txt;
-      ta.style.position = 'fixed';
-      ta.style.top = '-1000px';
-      ta.style.opacity = '0';
-      document.body.appendChild(ta);
-      ta.focus();
-      ta.select();
-      const ok = document.execCommand('copy');
-      document.body.removeChild(ta);
-      if(ok){ done(); } else { fail(); }
-    }catch(e){ fail(); }
-  };
-  if(navigator.clipboard && window.isSecureContext){
-    navigator.clipboard.writeText(txt).then(done).catch(fallback);
-  } else {
-    fallback();
-  }
-}
-
-async function loadEndpoint(port){
-  try{
-    const host = location.hostname;
-    const p = port || 18787;
-    const direct = 'http://' + host + ':' + p + '/v1';
-    document.getElementById('epDirect').value = direct;
-    document.getElementById('epLocal').value = 'http://127.0.0.1:' + p + '/v1';
-    document.getElementById('epGateway').value = BASE
-      ? (location.origin + BASE + '/v1')
-      : '（当前就是直连访问，无需网关）';
-
-    const r = await fetch(BASE + '/v1/models', {headers:H()});
-    const d = await r.json();
-    const ids = (d.data || []).map(m => m.id);
-    document.getElementById('epModels').value =
-      ids.length ? ids.join('  ,  ') : '（还没配置上游）';
-    const first = ids[0] || 'deepseek-v4.1-flash';
-    document.getElementById('epCurl').value =
-      'curl ' + direct + '/chat/completions -H "Content-Type: application/json" '
-      + '-H "Authorization: Bearer <你的Key>" '
-      + '-d ' + String.fromCharCode(39) + '{"model":"' + first
-      + '","messages":[{"role":"user","content":"hi"}]}' + String.fromCharCode(39);
-  }catch(e){}
 }
 
 let epInited = false;
@@ -1835,90 +1885,105 @@ load(); setInterval(load, 5000);
 """
 
 _SETTINGS_BODY = """
-<div class="wrap">
-  <h1>DeepSeek 网关 · 设置</h1>
-  <div class="sub">改完点「保存全部」立即生效 · <a href="#" data-nav="/admin">← 返回运行状态</a></div>
+<div class="layout">
+NAV
+  <main class="main">
+    <h1>设置</h1>
+    <div class="sub">改完点「保存全部」立即生效，不用重启。</div>
 
-  <h2>全局</h2>
-  <div class="row">
-    <span class="sub" style="margin:0">访问口令</span>
-    <input id="setTok" type="password" placeholder="留空 = 免口令" style="max-width:170px">
-    <button onclick="clearTok()">清除</button>
-    <span class="sub" style="margin:0">策略</span>
-    <select id="setStrat" style="max-width:130px">
-      <option value="priority">稳定优先</option>
-      <option value="cheapest">省钱优先</option>
-    </select>
-    <span class="sub" style="margin:0">冷却(秒)</span>
-    <input id="setCd" type="number" min="1" max="3600" style="max-width:80px">
-  </div>
-  <div class="row">
-    <span class="sub" style="margin:0">全局代理</span>
-    <select id="setProxyScheme" style="max-width:180px">
-      <option value="">不用代理</option>
-      <option value="http">HTTP</option>
-      <option value="https">HTTPS</option>
-      <option value="socks5">SOCKS5</option>
-      <option value="socks5h">SOCKS5（代理解析域名）</option>
-    </select>
-    <input id="setProxyAddr" placeholder="主机:端口，如 192.168.1.10:7890" style="flex:1;min-width:240px">
-    <button onclick="testProxy()">测试</button>
-    <span class="sub" id="proxyMsg"></span>
-  </div>
-
-  <h2>OpenCode 运行时（给 type=opencode 的上游用）</h2>
-  <div class="prov" style="max-width:840px">
-    <div class="hd"><span class="nm">opencode serve</span>
-      <span><span id="ocState" class="tag d">…</span></span></div>
-    <div class="sub" id="ocEnv" style="margin-bottom:6px">检测中…</div>
-    <div class="fld"><label>二进制</label><input id="ocBin" placeholder="留空 = 自动查找（应用私有安装 / PATH）"></div>
-    <div class="fld"><label>端口</label><input id="ocPort" type="number" placeholder="4096"></div>
-    <div class="fld"><label>工作目录</label><input id="ocWs" placeholder="留空 = 应用数据目录下 opencode-workspace"></div>
-    <div class="fld"><label>自动重启</label><input id="ocAuto" type="checkbox"></div>
-    <div class="fld"><label></label>
-      <button onclick="ocAction('install')">一键安装</button>
-      <button onclick="ocAction('start')">启动</button>
-      <button onclick="ocAction('stop')">停止</button>
-      <button onclick="ocAction('diagnose')">诊断</button>
-      <button onclick="ocRefresh()">刷新状态</button>
+    <div class="row">
+      <button class="pri" onclick="save()">保存全部</button>
+      <button onclick="addPreset('openai')">+ OpenAI 兼容接口</button>
+      <button onclick="addPreset('openrouter')">+ OpenRouter</button>
+      <button onclick="addPreset('ollama')">+ 本地 Ollama</button>
+      <button onclick="addProv()">+ 空白上游</button>
+      <button onclick="loadCfg()">重新载入</button>
+      <span class="msg" id="msg"></span>
     </div>
-    <pre id="ocLog" style="max-height:170px;overflow:auto;background:#0d1117;border:1px solid var(--line);border-radius:8px;padding:8px;font-size:11px;margin:8px 0 0"></pre>
-  </div>
 
-  <h2>访问令牌（给别人用这个网关时）</h2>
-  <div class="prov" style="max-width:920px">
-    <div class="sub" id="tokHint" style="margin-bottom:8px">…</div>
-    <div class="row" style="margin:0 0 8px">
-      <input id="newTokName" placeholder="备注名，如 小明的笔记本" style="flex:1;min-width:180px">
-      <input id="newTokQuota" type="number" placeholder="额度 tokens（0=不限）" style="max-width:200px">
-      <button class="pri" onclick="createTok()">新建令牌</button>
-      <button onclick="loadTokens()">刷新</button>
+    <h2>全局</h2>
+    <div class="card">
+      <div class="f2">
+        <div class="field"><label>访问口令</label>
+          <div class="inline"><input id="setTok" type="password" placeholder="留空 = 免口令">
+            <button onclick="clearTok()">清除</button></div>
+          <div class="hint">给自己用的主口令。给别人用请到下面「访问令牌」里建独立 Key。</div></div>
+        <div class="field"><label>失败冷却（秒）</label>
+          <input id="setCd" type="number" min="1" max="3600">
+          <div class="hint">某个上游失败后，等多久再试它。</div></div>
+      </div>
+      <div class="field"><label>排序策略</label>
+        <select id="setStrat">
+          <option value="priority">稳定优先（按优先级从上到下）</option>
+          <option value="cheapest">省钱优先（按价格从低到高）</option>
+        </select></div>
+      <div class="field" style="margin-bottom:0"><label>全局代理</label>
+        <div class="inline">
+          <select id="setProxyScheme" style="max-width:190px">
+            <option value="">不用代理</option>
+            <option value="http">HTTP</option>
+            <option value="https">HTTPS</option>
+            <option value="socks5">SOCKS5</option>
+            <option value="socks5h">SOCKS5（代理解析域名）</option>
+          </select>
+          <input id="setProxyAddr" placeholder="主机:端口，如 192.168.1.10:7890">
+          <button onclick="testProxy()">测试</button>
+        </div>
+        <div class="hint" id="proxyMsg">只有需要代理的上游才走它；国内直连的平台建议在卡片里单独留空。</div></div>
     </div>
-    <table>
-      <thead><tr><th>备注</th><th>Key</th><th>已用 tokens</th><th>状态</th><th>操作</th></tr></thead>
-      <tbody id="tokBody"></tbody>
-    </table>
-  </div>
 
-  <div class="row">
-    <button class="pri" onclick="save()">保存全部</button>
-    <button onclick="addPreset('openai')">+ OpenAI 兼容接口</button>
-    <button onclick="addPreset('openrouter')">+ OpenRouter</button>
-    <button onclick="addPreset('ollama')">+ 本地 Ollama</button>
-    <button onclick="addProv()">+ 空白上游</button>
-    <button onclick="loadCfg()">重新载入</button>
-    <span class="sub" id="msg"></span>
-  </div>
+    <h2>OpenCode 运行时（给 type=opencode 的上游用）</h2>
+    <div class="card">
+      <div class="phd"><span class="nm">opencode serve</span>
+        <span><span id="ocState" class="tag d">…</span></span></div>
+      <div class="hint" id="ocEnv" style="margin-bottom:12px">检测中…</div>
+      <div class="f2">
+        <div class="field"><label>二进制路径</label>
+          <input id="ocBin" placeholder="留空 = 自动查找"></div>
+        <div class="field"><label>端口</label>
+          <input id="ocPort" type="number" placeholder="4096"></div>
+      </div>
+      <div class="field"><label>工作目录</label>
+        <input id="ocWs" placeholder="留空 = 应用数据目录下 opencode-workspace">
+        <div class="hint">建议留空。它是个编码 Agent，空目录能避免误动你的文件。</div></div>
+      <div class="row" style="margin-bottom:0">
+        <label class="chk"><input id="ocAuto" type="checkbox"> 崩溃后自动重启</label>
+        <span style="flex:1"></span>
+        <button onclick="ocAction('install')">一键安装</button>
+        <button onclick="ocAction('start')">启动</button>
+        <button onclick="ocAction('stop')">停止</button>
+        <button onclick="ocAction('diagnose')">诊断</button>
+        <button onclick="ocRefresh()">刷新</button>
+      </div>
+      <pre id="ocLog">（暂无日志）</pre>
+    </div>
 
-  <h2>上游（每张卡片可单独配接口 / 模型 / 代理 / 密钥）</h2>
-  <div class="grid" id="grid"></div>
+    <h2>访问令牌（给别人用这个网关时）</h2>
+    <div class="card">
+      <div class="hint" id="tokHint" style="margin-bottom:10px">…</div>
+      <div class="inline" style="margin-bottom:12px">
+        <input id="newTokName" placeholder="备注名，如 小明的笔记本">
+        <input id="newTokQuota" type="number" placeholder="额度 tokens（0 = 不限）" style="max-width:210px">
+        <button class="pri" onclick="createTok()">新建令牌</button>
+        <button onclick="loadTokens()">刷新</button>
+      </div>
+      <div style="overflow-x:auto">
+        <table style="min-width:640px">
+          <thead><tr><th>备注</th><th>Key</th><th>已用 / 额度</th><th>状态</th><th>操作</th></tr></thead>
+          <tbody id="tokBody"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <h2>上游（提供模型的服务商）</h2>
+    <div class="grid pgrid" id="grid"></div>
+  </main>
 </div>
 """
 
 _SETTINGS_JS = """
 let CFG = null;
-
-function fld(label, inner){ return `<div class="fld"><label>${label}</label>${inner}</div>`; }
+let inited = false;
 
 const CONSOLE_MAP = [
   ['openrouter.ai', 'https://openrouter.ai/keys'],
@@ -1951,35 +2016,79 @@ function openConsole(el){
 function provCard(p, i){
   const cUrl = guessConsole(p);
   const link = cUrl
-    ? `<a href="${esc(cUrl)}" target="_blank" rel="noopener">去获取 Key ↗</a>` : '';
-  return `<div class="prov provcard" data-i="${i}">
-    <div class="hd"><input data-f="name" value="${esc(p.name)}" style="font-weight:600;flex:1">
-      <span>${link}</span></div>
-    ${fld('启用', `<input type="checkbox" data-f="enabled" ${p.enabled?'checked':''}>`)}
-    ${fld('类型', `<select data-f="type">
-        <option value="http" ${p.type!=='opencode'?'selected':''}>http（OpenAI 兼容）</option>
-        <option value="opencode" ${p.type==='opencode'?'selected':''}>opencode（本地 server）</option>
-      </select>`)}
-    ${fld('免密钥', `<input type="checkbox" data-f="no_auth" ${p.no_auth?'checked':''}>`)}
-    ${fld('接口', `<input data-f="base_url" value="${esc(p.base_url)}">`)}
-    ${fld('模型', `<input data-f="model" value="${esc(p.model)}">`)}
-    ${fld('校验串', `<input data-f="model_contains" value="${esc(p.model_contains)}" placeholder="留空 = 不校验">`)}
-    ${fld('严格校验', `<input type="checkbox" data-f="strict_model" ${p.strict_model?'checked':''}>`)}
-    ${fld('优先级', `<input type="number" data-f="priority" value="${p.priority||100}">`)}
-    ${fld('免费额度', `<input type="checkbox" data-f="free_only" ${p.free_only?'checked':''}>
-        <input type="number" data-f="free_quota_tokens" value="${p.free_quota_tokens||0}" placeholder="tokens，0=不限">`)}
-    ${fld('价格/M', `<input type="number" step="0.0001" data-f="price_in" value="${p.price_in||0}" placeholder="输入">
-        <input type="number" step="0.0001" data-f="price_out" value="${p.price_out||0}" placeholder="输出">`)}
-    ${fld('代理', `<input data-f="proxy" value="${esc(p.proxy)}" placeholder="留空 = 用全局；可填 socks5://host:port">`)}
-    ${fld('Key 变量', `<input data-f="api_key_env" value="${esc(p.api_key_env)}" placeholder="环境变量名">`)}
-    ${fld('Key', `<input type="password" class="kval" data-env="${esc(p.api_key_env)}"
-        placeholder="${esc(p._key_source||'无')}">`)}
-    ${fld('控制台', `<input data-f="console_url" value="${esc(p.console_url)}" placeholder="${esc(cUrl || '留空则按接口自动识别')}"><button type="button" data-url="${esc(cUrl)}" onclick="openConsole(this)">打开</button>`)}
-    ${fld('备注', `<input data-f="note" value="${esc(p.note)}">`)}
-    <div class="fld"><label></label>
-      <button onclick="probeOne('${esc(p.name)}')">自检</button>
-      <button class="danger" onclick="delProv(${i})">删除</button></div>
-  </div>`;
+    ? '<a href="' + esc(cUrl) + '" target="_blank" rel="noopener">去获取 Key ↗</a>' : '';
+  return '<div class="provcard" data-i="' + i + '">'
+    + '<div class="phd"><input data-f="name" value="' + esc(p.name)
+    + '" style="font-weight:700;flex:1;min-width:0">'
+    + '<span class="sub">' + link + '</span></div>'
+
+    + '<div class="field"><label>接口地址</label>'
+    + '<input data-f="base_url" value="' + esc(p.base_url) + '">'
+    + '<div class="hint">OpenAI 兼容根地址，结尾不要带斜杠。</div></div>'
+
+    + '<div class="f2">'
+    + '<div class="field"><label>模型名</label>'
+    + '<input data-f="model" value="' + esc(p.model) + '"></div>'
+    + '<div class="field"><label>优先级</label>'
+    + '<input type="number" data-f="priority" value="' + (p.priority || 100) + '">'
+    + '<div class="hint">越小越先试</div></div>'
+    + '</div>'
+
+    + '<div class="f2">'
+    + '<div class="field"><label>类型</label><select data-f="type">'
+    + '<option value="http"' + (p.type !== 'opencode' ? ' selected' : '') + '>http（OpenAI 兼容）</option>'
+    + '<option value="opencode"' + (p.type === 'opencode' ? ' selected' : '') + '>opencode（本地 server）</option>'
+    + '</select></div>'
+    + '<div class="field"><label>量化</label>'
+    + '<input data-f="quant" value="' + esc(p.quant) + '" placeholder="fp8 / fp4"></div>'
+    + '</div>'
+
+    + '<div class="field"><label>密钥</label>'
+    + '<input type="password" class="kval" data-env="' + esc(p.api_key_env) + '"'
+    + ' placeholder="' + esc(p._key_source || '无') + '">'
+    + '<div class="hint">变量名 <span class="mono">' + esc(p.api_key_env || '（未设置）') + '</span>'
+    + '　留空保存 = 不改动。</div></div>'
+
+    + '<div class="field"><label>控制台地址</label><div class="inline">'
+    + '<input data-f="console_url" value="' + esc(p.console_url) + '"'
+    + ' placeholder="' + esc(cUrl || '留空则按接口自动识别') + '">'
+    + '<button type="button" data-url="' + esc(cUrl) + '" onclick="openConsole(this)">打开</button>'
+    + '</div></div>'
+
+    + '<div class="field"><label>免费额度（tokens）</label><div class="inline">'
+    + '<input type="number" data-f="free_quota_tokens" value="' + (p.free_quota_tokens || 0) + '">'
+    + '<label class="chk"><input type="checkbox" data-f="free_only"'
+    + (p.free_only ? ' checked' : '') + '> 免费上游</label>'
+    + '</div><div class="hint">0 = 不限。填了额度，用尽后自动停用，不会悄悄转成付费。</div></div>'
+
+    + '<div class="f2">'
+    + '<div class="field"><label>输入价 $/百万</label>'
+    + '<input type="number" step="0.0001" data-f="price_in" value="' + (p.price_in || 0) + '"></div>'
+    + '<div class="field"><label>输出价 $/百万</label>'
+    + '<input type="number" step="0.0001" data-f="price_out" value="' + (p.price_out || 0) + '"></div>'
+    + '</div>'
+
+    + '<div class="f2">'
+    + '<div class="field"><label>模型名校验</label>'
+    + '<input data-f="model_contains" value="' + esc(p.model_contains) + '" placeholder="留空 = 不校验">'
+    + '<div class="hint">响应里的模型名必须包含它，防上游偷换</div></div>'
+    + '<div class="field"><label>单独代理</label>'
+    + '<input data-f="proxy" value="' + esc(p.proxy) + '" placeholder="留空 = 用全局">'
+    + '<div class="hint">可填 socks5://host:port</div></div>'
+    + '</div>'
+
+    + '<div class="field"><label>备注</label>'
+    + '<input data-f="note" value="' + esc(p.note) + '"></div>'
+
+    + '<div class="field" style="margin-bottom:0;display:flex;gap:10px;align-items:center;flex-wrap:wrap">'
+    + '<label class="chk"><input type="checkbox" data-f="enabled"' + (p.enabled ? ' checked' : '') + '> 启用</label>'
+    + '<label class="chk"><input type="checkbox" data-f="no_auth"' + (p.no_auth ? ' checked' : '') + '> 免密钥</label>'
+    + '<label class="chk"><input type="checkbox" data-f="strict_model"' + (p.strict_model ? ' checked' : '') + '> 严格校验</label>'
+    + '<span style="flex:1"></span>'
+    + '<button onclick="probeOne(\\'' + esc(p.name) + '\\')">自检</button>'
+    + '<button class="danger" onclick="delProv(' + i + ')">删除</button>'
+    + '</div>'
+    + '</div>';
 }
 
 function render(){
@@ -2004,49 +2113,51 @@ async function loadCfg(){
     CFG = await api('/admin/api/config');
     if(!CFG.providers) CFG.providers = [];
     render();
-  }catch(e){ if(e.message!=='unauthorized') msg('载入失败：'+e.message); }
+  }catch(e){ if(e.message !== 'unauthorized') msg('载入失败：' + e.message); }
 }
 
 function collect(){
-  const providers = [...document.querySelectorAll('.provcard')].map(el=>{
-    const o = {};
-    el.querySelectorAll('[data-f]').forEach(inp=>{
+  // 以原始配置为底，只覆盖界面上改过的字段——避免把 extra / timeout / opencode_* 丢掉
+  const providers = [...document.querySelectorAll('.provcard')].map(el => {
+    const idx = Number(el.dataset.i);
+    const src = CFG.providers[idx] || {};
+    const o = Object.assign({}, src);
+    delete o._has_key;
+    delete o._key_source;
+    el.querySelectorAll('[data-f]').forEach(inp => {
       const f = inp.dataset.f;
-      if(inp.type==='checkbox') o[f] = inp.checked;
-      else if(inp.type==='number') o[f] = inp.value==='' ? 0 : Number(inp.value);
+      if(inp.type === 'checkbox') o[f] = inp.checked;
+      else if(inp.type === 'number') o[f] = inp.value === '' ? 0 : Number(inp.value);
       else o[f] = inp.value;
     });
-    const src = CFG.providers[Number(el.dataset.i)];
-    o._source = (src && src._source) || 'main';
+    o._source = src._source || 'main';
     return o;
   });
   const secrets = {};
-  document.querySelectorAll('.provcard .kval').forEach(inp=>{
-    const v = (inp.value||'').trim(), env = inp.dataset.env;
+  document.querySelectorAll('.provcard .kval').forEach(inp => {
+    const v = (inp.value || '').trim();
+    const env = inp.dataset.env;
     if(v && env) secrets[env] = v;
   });
+  const sc = document.getElementById('setProxyScheme').value;
+  const ad = (document.getElementById('setProxyAddr').value || '').trim();
   const body = {
     strategy: document.getElementById('setStrat').value,
     cooldown_seconds: Number(document.getElementById('setCd').value || 60),
-    proxy: (function(){
-      const sc = document.getElementById('setProxyScheme').value;
-      const ad = (document.getElementById('setProxyAddr').value || '').trim();
-      return (sc && ad) ? (sc + '://' + ad) : '';
-    })(),
+    proxy: (sc && ad) ? (sc + '://' + ad) : '',
     providers: providers,
-    secrets: secrets
+    secrets: secrets,
+    opencode_bin: document.getElementById('ocBin').value,
+    opencode_port: Number(document.getElementById('ocPort').value || 4096),
+    opencode_workspace: document.getElementById('ocWs').value,
+    opencode_autostart: document.getElementById('ocAuto').checked
   };
   const t = (document.getElementById('setTok').value || '').trim();
   if(t) body.gateway_token = t;
-  body.opencode_bin = document.getElementById('ocBin').value;
-  body.opencode_port = Number(document.getElementById('ocPort').value || 4096);
-  body.opencode_workspace = document.getElementById('ocWs').value;
-  body.opencode_autostart = document.getElementById('ocAuto').checked;
   return body;
 }
 
 async function save(){
-  // 提交前自检，避免后端整页拒绝
   const cards = [...document.querySelectorAll('.provcard')];
   const names = cards.map(el => {
     const inp = el.querySelector('[data-f="name"]');
@@ -2057,10 +2168,8 @@ async function save(){
     return;
   }
   const dup = names.filter((n, i) => names.indexOf(n) !== i);
-  if(dup.length){
-    msg('上游名称重复：' + dup.join(', ') + ' —— 名称必须唯一');
-    return;
-  }
+  if(dup.length){ msg('上游名称重复：' + dup.join(', ') + ' —— 名称必须唯一'); return; }
+
   msg('保存中…');
   try{
     const d = await api('/admin/api/config', {method:'POST', body: JSON.stringify(collect())});
@@ -2069,42 +2178,9 @@ async function save(){
       document.getElementById('setTok').value = '';
       const od = d.on_disk || {};
       msg('已保存' + (od.proxy !== undefined
-        ? ('（磁盘：代理=' + (od.proxy || '空') + '，策略=' + (od.strategy || '-') + '）')
-        : ''));
+        ? ('（磁盘：代理=' + (od.proxy || '空') + '，策略=' + (od.strategy || '-') + '）') : ''));
     } else { msg('保存失败：' + (d.error || '未知错误')); }
   }catch(e){ msg('保存失败：' + e.message); }
-}
-
-const PRESETS = {
-  openai: {name: 'openai-compatible', type: 'http', enabled: false, priority: 50,
-    base_url: 'https://api.example.com/v1', model: '', model_contains: '',
-    no_auth: false, free_only: false, free_quota_tokens: 0,
-    price_in: 0, price_out: 0, proxy: '', console_url: '',
-    api_key_env: 'OPENAI_API_KEY',
-    note: '任意 OpenAI 兼容接口：填 base_url / 模型 / Key 即可'},
-  openrouter: {name: 'openrouter-custom', type: 'http', enabled: false, priority: 55,
-    base_url: 'https://openrouter.ai/api/v1', model: '', model_contains: '',
-    no_auth: false, free_only: false, free_quota_tokens: 0,
-    price_in: 0, price_out: 0, proxy: '', console_url: 'https://openrouter.ai/keys',
-    api_key_env: 'OPENROUTER_API_KEY',
-    note: 'OpenRouter：一个 Key 打通 40+ 家 provider（需代理）'},
-  ollama: {name: 'ollama-local', type: 'http', enabled: false, priority: 20,
-    base_url: 'http://127.0.0.1:11434/v1', model: 'deepseek-r1:8b',
-    model_contains: '', no_auth: true, free_only: true, free_quota_tokens: 0,
-    price_in: 0, price_out: 0, proxy: '', console_url: 'https://ollama.com/library',
-    api_key_env: '',
-    note: '本地 Ollama / vLLM / LM Studio：无需 Key，填对接口和模型名即可'}
-};
-
-function addPreset(kind){
-  const t = PRESETS[kind];
-  if(!t) return;
-  const p = JSON.parse(JSON.stringify(t));
-  p._source = 'main';
-  p._key_source = p.no_auth ? '免密钥' : '无';
-  CFG.providers.push(p);
-  render();
-  msg('已添加模板：' + p.name + ' —— 改完点「保存全部」');
 }
 
 function addProv(){
@@ -2118,6 +2194,38 @@ function addProv(){
   render();
 }
 
+const PRESETS = {
+  openai: {name: 'openai-compatible', type: 'http', enabled: false, priority: 50,
+    base_url: 'https://api.example.com/v1', model: '', model_contains: '',
+    no_auth: false, free_only: false, free_quota_tokens: 0,
+    price_in: 0, price_out: 0, proxy: '', console_url: '',
+    api_key_env: 'OPENAI_API_KEY',
+    note: '任意 OpenAI 兼容接口：填接口地址 / 模型 / Key 即可'},
+  openrouter: {name: 'openrouter-custom', type: 'http', enabled: false, priority: 55,
+    base_url: 'https://openrouter.ai/api/v1', model: '', model_contains: '',
+    no_auth: false, free_only: false, free_quota_tokens: 0,
+    price_in: 0, price_out: 0, proxy: '', console_url: 'https://openrouter.ai/keys',
+    api_key_env: 'OPENROUTER_API_KEY',
+    note: 'OpenRouter：一个 Key 打通 40+ 家 provider（需代理）'},
+  ollama: {name: 'ollama-local', type: 'http', enabled: false, priority: 20,
+    base_url: 'http://127.0.0.1:11434/v1', model: 'deepseek-r1:8b',
+    model_contains: '', no_auth: true, free_only: true, free_quota_tokens: 0,
+    price_in: 0, price_out: 0, proxy: '', console_url: 'https://ollama.com/library',
+    api_key_env: '',
+    note: '本地 Ollama / vLLM / LM Studio：不需要 Key'}
+};
+
+function addPreset(kind){
+  const t = PRESETS[kind];
+  if(!t) return;
+  const p = JSON.parse(JSON.stringify(t));
+  p._source = 'main';
+  p._key_source = p.no_auth ? '免密钥' : '无';
+  CFG.providers.push(p);
+  render();
+  msg('已添加模板：' + p.name + ' —— 改完点「保存全部」');
+}
+
 function delProv(i){
   CFG.providers.splice(i, 1);
   render();
@@ -2128,20 +2236,46 @@ async function probeOne(name){
   msg('正在自检 ' + name + ' …');
   try{
     const d = await api('/admin/api/probe', {method:'POST', body: JSON.stringify({name})});
-    msg(d.ok ? ('[通] ' + name + '  ' + d.ms + 'ms  ' + (d.sample||'').slice(0,60))
-             : ('[失败] ' + (d.error||'')));
+    msg(d.ok ? ('[通] ' + name + '  ' + d.ms + 'ms  ' + (d.sample || '').slice(0, 60))
+             : ('[失败] ' + name + '  ' + (d.error || '')));
   }catch(e){ msg('自检失败：' + e.message); }
 }
 
+async function testProxy(){
+  const el = document.getElementById('proxyMsg');
+  const scheme = document.getElementById('setProxyScheme').value;
+  const addr = (document.getElementById('setProxyAddr').value || '').trim();
+  const proxy = (scheme && addr) ? (scheme + '://' + addr) : '';
+  if(!proxy){ el.textContent = '先填代理地址'; return; }
+  el.textContent = '测试中…';
+  try{
+    const d = await api('/admin/api/proxy-test', {method:'POST',
+      body: JSON.stringify({proxy: proxy})});
+    el.textContent = d.ok
+      ? ('通：HTTP ' + d.status + ' · ' + d.ms + 'ms · ' + (d.note || '通道正常')
+         + '  ← 别忘了点「保存全部」')
+      : ('失败：' + (d.error || '') + '（' + (d.ms || 0) + 'ms）');
+  }catch(e){ el.textContent = '测试失败：' + e.message; }
+}
+
+async function clearTok(){
+  try{ await api('/admin/api/set-settings', {method:'POST',
+        body: JSON.stringify({gateway_token:''})});
+       localStorage.removeItem('gw_token'); msg('已清除访问口令'); }
+  catch(e){ msg('失败：' + e.message); }
+  loadCfg();
+}
+
+/* ---------- OpenCode 运行时 ---------- */
 function ocPaint(d){
   const el = document.getElementById('ocState');
   el.textContent = d.running ? ('运行中 pid ' + d.pid)
                              : (d.installed ? '未运行' : '未安装');
   el.className = 'tag ' + (d.running ? 'g' : (d.installed ? 'y' : 'd'));
   document.getElementById('ocLog').textContent =
-    (d.last_error ? ('[错误] ' + d.last_error + ' | ') : '') + (d.log || '(无日志)');
-  const env = document.getElementById('ocEnv');
-  env.textContent = 'Node ' + (d.node_version || (d.node ? '?' : '未找到'))
+    (d.last_error ? ('[错误] ' + d.last_error + ' | ') : '') + (d.log || '（暂无日志）');
+  document.getElementById('ocEnv').textContent =
+    'Node ' + (d.node_version || (d.node ? '?' : '未找到'))
     + (d.node ? ('（' + d.node + '）') : '')
     + ' · npm ' + (d.npm_version || '—')
     + ' · opencode ' + (d.bin ? (d.bin_source + '：' + d.bin) : '未安装');
@@ -2154,7 +2288,7 @@ async function ocRefresh(){
     if(d.bin && !document.getElementById('ocBin').value){
       document.getElementById('ocBin').placeholder = '自动：' + d.bin;
     }
-  }catch(e){ if(e.message!=='unauthorized') msg('读取运行时状态失败：'+e.message); }
+  }catch(e){ if(e.message !== 'unauthorized') msg('读取运行时状态失败：' + e.message); }
 }
 
 async function ocAction(action){
@@ -2164,12 +2298,12 @@ async function ocAction(action){
     msg((d.ok ? '[成功] ' : '[失败] ') + (d.message || ''));
     ocPaint(d);
     if(action === 'diagnose' && d.diag){
-      document.getElementById('ocLog').textContent =
-        JSON.stringify(d.diag, null, 2);
+      document.getElementById('ocLog').textContent = JSON.stringify(d.diag, null, 2);
     }
   }catch(e){ msg('操作失败：' + e.message); }
 }
 
+/* ---------- 访问令牌 ---------- */
 async function loadTokens(){
   try{
     const d = await api('/admin/api/tokens');
@@ -2195,45 +2329,6 @@ async function loadTokens(){
     document.getElementById('tokBody').innerHTML =
       rows || '<tr><td colspan="5" class="sub">还没有令牌</td></tr>';
   }catch(e){ if(e.message !== 'unauthorized') msg('读取令牌失败：' + e.message); }
-}
-
-async function testProxy(){
-  const el = document.getElementById('proxyMsg');
-  const scheme = document.getElementById('setProxyScheme').value;
-  const addr = (document.getElementById('setProxyAddr').value || '').trim();
-  const proxy = (scheme && addr) ? (scheme + '://' + addr) : '';
-  if(!proxy){ el.textContent = '先填地址'; return; }
-  el.textContent = '测试中…';
-  try{
-    const d = await api('/admin/api/proxy-test', {method:'POST',
-      body: JSON.stringify({proxy: proxy})});
-    el.textContent = d.ok
-      ? ('通：HTTP ' + d.status + ' · ' + d.ms + 'ms · ' + (d.note || '通道正常')
-         + '  ← 别忘了点「保存全部」')
-      : ('失败：' + (d.error || '') + '（' + (d.ms || 0) + 'ms）');
-  }catch(e){ el.textContent = '测试失败：' + e.message; }
-}
-
-async function tokReveal(el){
-  const id = el.dataset.id;
-  const span = document.querySelector('.kv[data-id="' + id + '"]');
-  if(!span) return;
-  if(span.dataset.shown === '1'){
-    span.textContent = span.dataset.masked || '';
-    span.dataset.shown = '0';
-    el.textContent = '显示';
-    return;
-  }
-  try{
-    const d = await api('/admin/api/tokens', {method:'POST',
-      body: JSON.stringify({action:'reveal', id: id})});
-    if(d.ok){
-      span.dataset.masked = span.textContent;
-      span.textContent = d.key;
-      span.dataset.shown = '1';
-      el.textContent = '隐藏';
-    } else { msg('无法显示：' + (d.error || '')); }
-  }catch(e){ msg('失败：' + e.message); }
 }
 
 async function createTok(){
@@ -2268,11 +2363,26 @@ async function tokDelete(el){
   loadTokens();
 }
 
-async function clearTok(){
-  try{ await api('/admin/api/set-settings', {method:'POST', body: JSON.stringify({gateway_token:''})});
-       localStorage.removeItem('gw_token'); msg('已清除访问口令'); }
-  catch(e){ msg('失败：' + e.message); }
-  loadCfg();
+async function tokReveal(el){
+  const id = el.dataset.id;
+  const span = document.querySelector('.kv[data-id="' + id + '"]');
+  if(!span) return;
+  if(span.dataset.shown === '1'){
+    span.textContent = span.dataset.masked || '';
+    span.dataset.shown = '0';
+    el.textContent = '显示';
+    return;
+  }
+  try{
+    const d = await api('/admin/api/tokens', {method:'POST',
+      body: JSON.stringify({action:'reveal', id: id})});
+    if(d.ok){
+      span.dataset.masked = span.textContent;
+      span.textContent = d.key;
+      span.dataset.shown = '1';
+      el.textContent = '隐藏';
+    } else { msg('无法显示：' + (d.error || '')); }
+  }catch(e){ msg('失败：' + e.message); }
 }
 
 loadCfg();
@@ -2291,8 +2401,20 @@ def _page(title: str, body: str, script: str) -> str:
     )
 
 
-STATUS_HTML = _page("DeepSeek 网关 · 状态", _STATUS_BODY, _STATUS_JS)
-SETTINGS_HTML = _page("DeepSeek 网关 · 设置", _SETTINGS_BODY, _SETTINGS_JS)
+def _nav(active: str) -> str:
+    """把侧栏里的占位符换掉：当前页高亮，另一个留空。"""
+    side = _SIDE
+    side = side.replace("NAV_ADMIN", "on" if active == "admin" else "")
+    side = side.replace("NAV_SET", "on" if active == "settings" else "")
+    return side
+
+
+STATUS_HTML = _page("DeepSeek 网关 · 概览",
+                    _STATUS_BODY.replace("NAV", _nav("admin")),
+                    _STATUS_JS)
+SETTINGS_HTML = _page("DeepSeek 网关 · 设置",
+                      _SETTINGS_BODY.replace("NAV", _nav("settings")),
+                      _SETTINGS_JS)
 
 
 def main() -> int:
