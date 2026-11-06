@@ -1,7 +1,7 @@
 appname=deepseek-gateway
-version=2.7.2
-display_name=DeepSeek 网关
-desc=把火山方舟、硅基流动、OpenRouter、腾讯 TokenHub、百度千帆、DeepSeek 官方等多个上游聚合成一个 OpenAI 兼容端点。<br>默认只启用免费上游，付费一律关闭；免费额度用尽自动停用，绝不静默转付费。<br>纯 Python 标准库实现，不依赖 Docker 与任何第三方包。
+version=3.0.0
+display_name=AI 网关
+desc=把多个模型服务商聚合成一个 OpenAI 兼容接口，跑在自己的飞牛 NAS 上。<br>支持 OpenAI Chat / Responses / Anthropic / Gemini 四种上游协议，失败自动切换下一家。<br>带用量统计（按天、按上游）、访问令牌、调用日志、出站品牌词脱敏、本地 opencode 托管。<br>免费额度可硬卡，用尽自动停用，绝不静默转付费。纯 Python 标准库，零第三方依赖，零 Docker。
 source=thirdparty
 platform=all
 maintainer=fnos-user
@@ -13,4 +13,4 @@ desktop_applaunchname=deepseek-gateway.main
 service_port=18787
 checkport=true
 ctl_stop=true
-changelog=2.7.2：修复「探测这个上游有哪些模型」对 opencode 上游报 JSONDecodeError——不再依赖 serve 的 /config/providers，改为跑 `opencode models`，并只保留该上游真正能用的命名空间（opencode/*；opencode-go/* 需要订阅，不再混入误填）。2.7.1：子进程干净环境修复 ECONNREFUSED。2.7.0：--standalone。2.6.x：登录向导与界面。2.5.x：opencode CLI。2.4.x：上游协议。1.1.0：免费优先。1.0.0：首个版本。
+changelog=3.0.0：整体重写。后端拆分模块、界面改为独立静态文件（HTML/CSS/JS 分离，浅色侧边栏布局，五个页面：概览 / 上游 / 统计 / 日志 / 设置）。新增用量统计（按天、按上游，含成功率与平均耗时）、出站品牌词脱敏（可选作用域）、SSE 真流式透传、访问令牌验证、更清晰的 502 原因说明。2.7.x：opencode 命令行修复（--standalone、干净环境、模型探测）。2.6.x：登录向导。2.5.x：opencode CLI。2.4.x：上游协议。1.0.0：首个版本。
