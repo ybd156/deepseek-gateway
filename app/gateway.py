@@ -3255,7 +3255,7 @@ function ocPaint(d){
     'Node ' + (d.node_version || (d.node ? '?' : '未找到'))
     + (d.node ? ('（' + d.node + '）') : '')
     + ' · npm ' + (d.npm_version || '—')
-    + ' · opencode ' + (d.bin ? (d.bin_source + '：' + d.bin) : '未安装');
+    + ' · opencode ' + (d.bin ? ((d.bin_version || '?') + '　' + d.bin) : '未安装');
 }
 
 async function ocRefresh(){
