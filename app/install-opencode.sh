@@ -97,17 +97,23 @@ if [ -z "$INSTALLED" ]; then
     exit 1
 fi
 
-OC_BIN="$DATA_DIR/npm/bin/opencode"
-if [ ! -x "$OC_BIN" ]; then
-    ALT=""
-    for cand in "$DATA_DIR/npm/lib/node_modules/@opencode/cli/bin/opencode"                 "$DATA_DIR/npm/lib/node_modules/opencode-ai/bin/opencode"; do
-        if [ -f "$cand" ]; then ALT="$cand"; break; fi
+# v2 装出来的可执行文件叫 opencode2，v1 叫 opencode，两个都认
+OC_BIN=""
+for cand in "$DATA_DIR/npm/bin/opencode2" "$DATA_DIR/npm/bin/opencode"; do
+    if [ -e "$cand" ]; then OC_BIN="$cand"; break; fi
+done
+
+if [ -z "$OC_BIN" ]; then
+    for alt in         "$DATA_DIR/npm/lib/node_modules/@opencode/cli/bin/opencode2"         "$DATA_DIR/npm/lib/node_modules/@opencode/cli/bin/opencode"         "$DATA_DIR/npm/lib/node_modules/opencode-ai/bin/opencode"; do
+        if [ -f "$alt" ]; then
+            mkdir -p "$DATA_DIR/npm/bin"
+            name="$(basename "$alt")"
+            ln -sf "$alt" "$DATA_DIR/npm/bin/$name"
+            chmod +x "$DATA_DIR/npm/bin/$name" 2>/dev/null || true
+            OC_BIN="$DATA_DIR/npm/bin/$name"
+            break
+        fi
     done
-    if [ -n "$ALT" ] && [ -f "$ALT" ]; then
-        mkdir -p "$DATA_DIR/npm/bin"
-        ln -sf "$ALT" "$OC_BIN"
-        chmod +x "$OC_BIN" 2>/dev/null || true
-    fi
 fi
 
 if [ ! -e "$OC_BIN" ]; then
