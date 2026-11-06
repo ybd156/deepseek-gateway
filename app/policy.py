@@ -92,8 +92,17 @@ DEFAULT_CAPS = {"context": 32768, "max_output": 4096,
 TIERS = ["off", "low", "medium", "high", "max"]
 
 
-def caps_for(model: str, override: dict | None = None) -> dict:
-    """查一个模型的能力。override 优先（用户在面板里手填的）。"""
+CAP_KEYS = ("context", "max_output", "vision", "reasoning")
+
+
+def caps_for(model: str, override: dict | None = None,
+             upstream: dict | None = None) -> dict:
+    """查一个模型的能力，三层来源，越靠前越优先。
+
+    1. override  —— 面板里手填的（最可信，人说了算）
+    2. upstream  —— 从上游 /models 探测到的（真实，但可能不全）
+    3. 内置表     —— 猜的，兜底
+    """
     name = str(model or "").lower()
     hit = None
     for frag, caps in BUILTIN_CAPS:
@@ -102,12 +111,82 @@ def caps_for(model: str, override: dict | None = None) -> dict:
             break
     base = dict(hit or DEFAULT_CAPS)
     base["known"] = hit is not None
+    base["source"] = "builtin" if hit else "guess"
+
+    if isinstance(upstream, dict) and upstream:
+        got = False
+        for k in CAP_KEYS:
+            v = upstream.get(k)
+            if v not in (None, ""):
+                base[k] = v
+                got = True
+        if got:
+            base["known"] = True
+            base["source"] = "upstream"
+
     if isinstance(override, dict) and override:
-        for k in ("context", "max_output", "vision", "reasoning"):
+        for k in CAP_KEYS:
             if k in override and override[k] not in (None, ""):
                 base[k] = override[k]
         base["known"] = True
+        base["source"] = "manual"
+
     return base
+
+
+def parse_upstream_models(data) -> dict:
+    """从上游 /models 的响应里抠出能力。各家字段名不一样，都试一遍。"""
+    items = data.get("data") if isinstance(data, dict) else data
+    out = {}
+    for it in items or []:
+        if isinstance(it, str):
+            continue
+        if not isinstance(it, dict):
+            continue
+        mid = str(it.get("id") or it.get("name") or "").strip()
+        if not mid:
+            continue
+        top = it.get("top_provider") or {}
+        if not isinstance(top, dict):
+            top = {}
+        arch = it.get("architecture") or {}
+        if not isinstance(arch, dict):
+            arch = {}
+
+        ctx = (it.get("context_length") or it.get("context_window")
+               or it.get("max_context_length") or top.get("context_length")
+               or (it.get("limits") or {}).get("context")
+               or (it.get("model_info") or {}).get("context_size"))
+        mo = (it.get("max_completion_tokens") or it.get("max_output_tokens")
+              or it.get("max_tokens") or top.get("max_completion_tokens")
+              or (it.get("limits") or {}).get("max_output")
+              or (it.get("model_info") or {}).get("max_output"))
+
+        mods = (arch.get("input_modalities") or it.get("input_modalities")
+                or it.get("modalities") or [])
+        vision = None
+        if isinstance(mods, list) and mods:
+            vision = any(str(m).lower() in ("image", "vision", "img") for m in mods)
+        for key in ("supports_vision", "support_vision", "vision"):
+            if vision is None and isinstance(it.get(key), bool):
+                vision = it[key]
+
+        caps = {}
+        try:
+            if ctx:
+                caps["context"] = int(ctx)
+        except Exception:
+            pass
+        try:
+            if mo:
+                caps["max_output"] = int(mo)
+        except Exception:
+            pass
+        if vision is not None:
+            caps["vision"] = bool(vision)
+        if caps:
+            out[mid] = caps
+    return out
 
 
 # ─────────────────────────── 名单 / 映射 ───────────────────────────
