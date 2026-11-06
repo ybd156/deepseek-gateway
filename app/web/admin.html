@@ -330,14 +330,19 @@
           <option value="ok">只看成功</option>
           <option value="fail">只看失败</option>
         </select>
+        <select id="logKind" onchange="renderLog()" style="max-width:150px">
+          <option value="all">全部类型</option>
+          <option value="chat">只看对话</option>
+          <option value="probe">只看自检</option>
+        </select>
         <input id="logSearch" placeholder="搜 IP / UA / 模型 / 请求 ID" oninput="renderLog()"
           style="max-width:250px">
         <span class="msg" id="logMsg"></span>
       </div>
       <div class="tablewrap">
-        <table class="wide" style="min-width:1320px">
+        <table class="wide" style="min-width:1400px">
           <thead><tr>
-            <th>时间</th><th>结果</th><th>客户端点名</th><th>上游实际</th>
+            <th>时间</th><th>结果</th><th>类型</th><th>客户端点名</th><th>上游实际</th>
             <th>令牌</th><th>档位</th><th>请求</th><th>首字</th><th>总耗时</th>
             <th>速度</th><th>Token</th><th>缓存</th><th>来源 IP</th>
             <th>客户端</th><th>请求 ID</th>
