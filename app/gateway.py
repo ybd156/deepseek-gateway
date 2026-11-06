@@ -1211,7 +1211,9 @@ def call_opencode_cli(p: dict, payload: dict) -> tuple[dict, str]:
     model_arg = model
     if model and "/" not in model:
         model_arg = (p.get("opencode_provider") or "opencode") + "/" + model
-    args = [bin_path, "run"]
+    # --standalone：用私有服务。默认会去连共享服务，连不上就 ECONNREFUSED，
+    # 表现为「可用但永远失败」，很难查。
+    args = [bin_path, "run", "--standalone"]
     if model_arg:
         args += ["--model", model_arg]
     agent = p.get("opencode_agent") or "plan"
