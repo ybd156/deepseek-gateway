@@ -1084,14 +1084,19 @@ async function loadCaps() {
       }).join('');
       const chk = checkMap[m.model] || {};
       const usable = chk.usable !== false;
+      const srcMap = {
+        manual: ['手动', 'd'], upstream: ['上游', 'g'],
+        builtin: ['内置', 'y'], guess: ['未知', 'r']
+      };
+      const sv = srcMap[m.source] || srcMap.guess;
       return '<tr>'
-        + '<td class="mono clip" title="' + esc(m.model) + '">' + esc(m.model)
-        + (m.known ? '' : ' <span class="tag y">未知</span>') + '</td>'
+        + '<td class="mono clip" title="' + esc(m.model) + '">' + esc(m.model) + '</td>'
         + '<td class="sub">' + esc(m.provider) + '</td>'
         + '<td><span class="tag ' + (usable ? 'g' : 'r') + '">'
         + (usable ? '可用' : '不可用') + '</span>'
         + (usable ? '' : '<div class="sub">' + esc(chk.reason || '') + '</div>')
         + '</td>'
+        + '<td><span class="tag ' + sv[1] + '">' + sv[0] + '</span></td>'
         + '<td><input class="capin" type="number" value="' + (m.context || '')
         + '" data-m="' + esc(m.model) + '" data-k="context"></td>'
         + '<td><input class="capin" type="number" value="' + (m.max_output || '')
@@ -1102,7 +1107,7 @@ async function loadCaps() {
         + '<td><select class="capin" data-m="' + esc(m.model) + '" data-k="effort">'
         + '<option value="">跟随默认</option>' + opts + '</select></td>'
         + '</tr>';
-    }).join('') || '<tr><td colspan="8" class="sub">还没有模型</td></tr>';
+    }).join('') || '<tr><td colspan="9" class="sub">还没有模型</td></tr>';
   } catch (e) { msg('Models', '读取失败：' + e.message); }
 }
 
@@ -1158,6 +1163,30 @@ async function saveAdvanced() {
     if (d.providers) { CFG = d; msg('Advanced', '已保存'); }
     else msg('Advanced', '保存失败：' + (d.error || ''));
   } catch (e) { msg('Advanced', '保存失败：' + e.message); }
+}
+
+
+async function refreshCaps() {
+  msg('Models', '正在问各上游……');
+  try {
+    const d = await api('/admin/api/refresh-caps', { method: 'POST', body: '{}' });
+    if (d.ok) {
+      msg('Models', '探测完成：更新 ' + d.updated + ' 个模型'
+        + (d.failed && d.failed.length ? '，问不到：' + d.failed.join('、') : ''));
+      loadCaps();
+    } else msg('Models', '探测失败：' + (d.error || ''));
+  } catch (e) { msg('Models', '探测失败：' + e.message); }
+}
+
+async function loadGwInfo() {
+  const el = document.getElementById('gwInfo');
+  const inp = document.getElementById('gwInfoUrl');
+  if (inp && !inp.value) inp.value = location.origin + BASE + '/v1/gateway';
+  el.textContent = '读取中…';
+  try {
+    const d = await api('/v1/gateway');
+    el.textContent = JSON.stringify(d, null, 2);
+  } catch (e) { el.textContent = '读取失败：' + e.message; }
 }
 
 // ── 启动 ────────────────────────────────────────────────
