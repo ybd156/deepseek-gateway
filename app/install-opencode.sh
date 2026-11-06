@@ -1,5 +1,6 @@
 #!/bin/bash
-# 把 Node + opencode 装进应用私有目录（不碰系统包，删目录即卸载）
+# 安装 opencode 到应用私有目录（不碰系统包，删目录即卸载）
+# 飞牛自带 Node，所以默认直接用系统的；只有系统里真没有才去下 Node 包
 # 由网关的「一键安装」按钮调用：install-opencode.sh <DATA_DIR>
 set -uo pipefail
 
@@ -8,6 +9,10 @@ if [ -z "$DATA_DIR" ]; then
     echo "用法：install-opencode.sh <DATA_DIR>"
     exit 1
 fi
+
+# 应用以专用用户运行，PATH 可能很干净，显式兜底常见目录
+EXTRA="/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin:/opt/bin:/snap/bin"
+export PATH="$DATA_DIR/node/bin:$DATA_DIR/npm/bin:$EXTRA:${PATH:-}"
 
 ARCH="$(uname -m)"
 case "$ARCH" in
@@ -18,18 +23,24 @@ esac
 
 mkdir -p "$DATA_DIR/node" "$DATA_DIR/npm" || exit 1
 
-# ── 1) Node：系统有就用系统的 ──
-if command -v node >/dev/null 2>&1 && command -v npm >/dev/null 2>&1; then
-    echo "使用系统已有的 Node：$(node -v 2>&1)"
+# ── 1) 找 Node：系统有就绝不下载 ──
+NODE_BIN="$(command -v node 2>/dev/null || true)"
+NPM_BIN="$(command -v npm 2>/dev/null || true)"
+
+if [ -n "$NODE_BIN" ] && [ -n "$NPM_BIN" ]; then
+    echo "检测到系统 Node：$("$NODE_BIN" -v 2>&1)  路径：$NODE_BIN"
+    echo "检测到系统 npm ：$("$NPM_BIN" -v 2>&1)  路径：$NPM_BIN"
+    echo "→ 直接用它安装 opencode，不下载 Node"
 else
+    echo "系统里没找到 node/npm，改为下载 Node 到应用私有目录"
+    [ -n "$NODE_BIN" ] && echo "（只找到 node：$NODE_BIN，缺 npm）"
     NODE_VER="${NODE_VER:-v22.14.0}"
     URL="https://nodejs.org/dist/${NODE_VER}/node-${NODE_VER}-linux-${NARCH}.tar.xz"
-    echo "下载 Node ${NODE_VER} (${NARCH})"
-    echo "  $URL"
+    echo "下载：$URL"
     TMP="$(mktemp -d)" || exit 1
     if ! curl -fL --retry 3 --retry-delay 3 --max-time 900 -o "$TMP/node.tar.xz" "$URL"; then
         echo "下载失败。可以："
-        echo "  1) 换版本：NODE_VER=v20.18.0 重试（改应用设置或手动跑本脚本）"
+        echo "  1) 指定版本重试：NODE_VER=v20.18.0"
         echo "  2) 手动下载 node-*-linux-${NARCH}.tar.xz 解压到 $DATA_DIR/node（--strip-components=1）"
         rm -rf "$TMP"
         exit 1
@@ -40,24 +51,35 @@ else
         exit 1
     fi
     rm -rf "$TMP"
+    export PATH="$DATA_DIR/node/bin:$PATH"
+    NODE_BIN="$DATA_DIR/node/bin/node"
+    NPM_BIN="$DATA_DIR/node/bin/npm"
+    echo "私有 Node：$("$NODE_BIN" -v 2>&1)"
 fi
-
-export PATH="$DATA_DIR/node/bin:$DATA_DIR/npm/bin:$PATH"
-
-echo "node: $(node -v 2>&1)"
-echo "npm : $(npm -v 2>&1)"
 
 # ── 2) opencode ──
-echo "安装 opencode-ai …"
-if ! npm install -g --prefix "$DATA_DIR/npm" opencode-ai; then
-    echo "npm 安装失败（检查网络 / npm 源）"
+echo "安装 opencode-ai 到 $DATA_DIR/npm …"
+if ! "$NPM_BIN" install -g --prefix "$DATA_DIR/npm" opencode-ai; then
+    echo "npm 安装失败（检查网络 / npm 源；飞牛上可先 npm config get registry）"
     exit 1
 fi
 
-if [ ! -x "$DATA_DIR/npm/bin/opencode" ]; then
-    echo "安装完成但没找到 $DATA_DIR/npm/bin/opencode"
+OC_BIN="$DATA_DIR/npm/bin/opencode"
+if [ ! -x "$OC_BIN" ]; then
+    # 有些 npm 版本把 bin 放在 lib/node_modules 下
+    ALT="$DATA_DIR/npm/lib/node_modules/opencode-ai/bin/opencode"
+    if [ -f "$ALT" ]; then
+        mkdir -p "$DATA_DIR/npm/bin"
+        ln -sf "$ALT" "$OC_BIN"
+        chmod +x "$OC_BIN" 2>/dev/null || true
+    fi
+fi
+
+if [ ! -e "$OC_BIN" ]; then
+    echo "安装完成但没找到 $OC_BIN"
+    ls -la "$DATA_DIR/npm/bin" 2>/dev/null
     exit 1
 fi
 
-echo "版本：$("$DATA_DIR/npm/bin/opencode" --version 2>&1 | head -n1)"
-echo "完成：$DATA_DIR/npm/bin/opencode"
+echo "版本：$("$OC_BIN" --version 2>&1 | head -n1)"
+echo "完成：$OC_BIN"
