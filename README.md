@@ -217,8 +217,16 @@ https://github.com/ybd156/fnos-ai-gateway)　开发者 [@ybd156](https://github.
 | **图片** | 不支持视觉的模型收到图片会直接 400 说明原因，不会瞎发 |
 | **思考档位** | off / low / medium / high / max，不支持时落到不高于它的最高档 |
 
-内置能力表覆盖 DeepSeek / GLM / Kimi / Qwen / Claude / GPT / Gemini / Llama 等常见模型；
-表里没有的标「未知」，按 32K 保守处理，可以在表格里手填覆盖。
+内置能力表覆盖 DeepSeek / GLM / Kimi / Qwen / Claude / GPT / Gemini / Llama 等常见模型，
+以及 OpenCode Zen 自营的免费模型（beam / crouton / flint / pulse / mimo / nemotron /
+minimax / muse / exo / fledge 等）。
+
+数据来源：
+
+- **上下文与图片能力** —— 公开模型目录（llmdir / models.dev 的 OpenCode Zen 条目），
+  按各模型的 `input_modalities` 判定是否吃图片
+- **最大输出** —— 目录里不提供，按同类模型估算；上游 `/models` 给了真值就覆盖
+- 表里没有的标「未知」，按 32K / 4K 保守处理，可以在表格里手填覆盖
 
 档位策略三选一：
 
