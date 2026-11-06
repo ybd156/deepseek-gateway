@@ -146,14 +146,23 @@ class OpenCodeSupervisor:
         """ESC 被吃掉后常剩下 [39m / [7m 这种残渣，一并清掉。"""
         out, i = [], 0
         while i < len(text):
-            if text[i] == "[":
+            ch = text[i]
+            if ch == "[":
                 j = i + 1
                 while j < len(text) and (text[j].isdigit() or text[j] == ";"):
                     j += 1
                 if j > i + 1 and j < len(text) and text[j].isalpha():
                     i = j + 1
                     continue
-            out.append(text[i])
+            # 裸的 28m / 7m 这种（ESC 和 [ 都没了）
+            if ch.isdigit() and (i == 0 or text[i - 1] in " [;"):
+                j = i
+                while j < len(text) and text[j].isdigit():
+                    j += 1
+                if j - i <= 3 and j < len(text) and text[j] in "mM":
+                    i = j + 1
+                    continue
+            out.append(ch)
             i += 1
         return "".join(out)
 
@@ -246,10 +255,21 @@ class OpenCodeSupervisor:
             return st
 
         for kw in ("logged in", "login successful", "connected", "authenticated",
-                   "account added", "success"):
+                   "account added", "success", "done"):
             if kw in low:
-                st.update(state="done", title="登录成功",
-                          hint="回去点「试一句」验证，通了就把上游启用。")
+                if "opencode go" in low:
+                    st.update(state="done", title="已连接 OpenCode Go（订阅制）",
+                              hint="Go 是按订阅计费的。如果你没有订阅，请重新登录并选 "
+                                   "「OpenCode Console」。先点下面验证一下。",
+                              actions=[{"id": "ping", "label": "试一句验证"}])
+                elif "opencode console" in low:
+                    st.update(state="done", title="已连接 OpenCode Console",
+                              hint="点下面验证一下，通了就把上游启用。",
+                              actions=[{"id": "ping", "label": "试一句验证"}])
+                else:
+                    st.update(state="done", title="登录成功",
+                              hint="点下面验证一下，通了就把上游启用。",
+                              actions=[{"id": "ping", "label": "试一句验证"}])
                 return st
 
         for kw in ("error", "failed", "invalid", "denied", "expired"):
