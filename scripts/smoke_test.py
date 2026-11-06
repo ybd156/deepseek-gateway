@@ -867,6 +867,26 @@ def main() -> int:
         check(any(p["name"] == "brand-new" for p in d8.get("providers", [])),
               "新名字会自动追加", str([p["name"] for p in d8.get("providers", [])][-3:]))
 
+        print("== 24. 设了主口令后，访问令牌也要能拉模型列表 ==")
+        code, _, txt = http("POST", base + "/admin/api/set-settings",
+                            {"gateway_token": "sk-master-x"})
+        check(code == 200, "设置主口令", txt[:80])
+        code, _, _ = http("GET", base + "/v1/models",
+                          headers={"Authorization": "Bearer " + key1})
+        check(code == 200, "访问令牌能列模型（不再是 401）", str(code))
+        code, _, _ = http("GET", base + "/v1/models",
+                          headers={"Authorization": "Bearer sk-master-x"})
+        check(code == 200, "主口令也能列模型", str(code))
+        code, _, _ = http("GET", base + "/v1/models",
+                          headers={"Authorization": "Bearer sk-bogus"})
+        check(code == 401, "错误 Key 仍然被拒", str(code))
+        code, _, _ = http("POST", base + "/v1/chat/completions",
+                          {"messages": [{"role": "user", "content": "hi"}]},
+                          headers={"Authorization": "Bearer " + key1})
+        check(code == 200, "访问令牌也能聊天", str(code))
+        http("POST", base + "/admin/api/set-settings", {"gateway_token": ""},
+             headers={"Authorization": "Bearer sk-master-x"})
+
     finally:
         proc.terminate()
         try:
