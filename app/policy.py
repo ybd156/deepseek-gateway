@@ -12,6 +12,119 @@ import re
 # ─────────────────────────── 模型能力表 ───────────────────────────
 # 键是"模型名里出现的片段"，从上到下第一个命中生效（更具体的放前面）。
 # context 单位 token；vision = 能否吃图片；reasoning = 支持的思考档位列表。
+# OpenCode Zen 自营 / 免费模型。
+# 上下文与图片能力来自公开模型目录（llmdir / models.dev 的 OpenCode Zen 条目）；
+# max_output 目录里不给，按同类模型估算（标注 est），上游探测到真值会覆盖。
+OPENCODE_CAPS: list = [
+    # —— 1M 上下文档 ——
+    ("beam-free", {"context": 1048576, "max_output": 32768, "vision": False,
+                   "reasoning": ["off", "low", "medium", "high"]}),
+    ("cat-jam-free", {"context": 1048576, "max_output": 32768, "vision": False,
+                      "reasoning": ["off", "low", "medium", "high"]}),
+    ("crouton-alpha-free", {"context": 1048576, "max_output": 32768, "vision": True,
+                            "reasoning": ["off", "low", "medium", "high"]}),
+    ("exo-free", {"context": 1048576, "max_output": 32768, "vision": False,
+                  "reasoning": ["off", "low", "medium", "high"]}),
+    ("fledge-alpha-free", {"context": 1048576, "max_output": 32768, "vision": False,
+                           "reasoning": ["off", "low", "medium", "high"]}),
+    ("pulse-alpha-free", {"context": 1048576, "max_output": 32768, "vision": True,
+                          "reasoning": ["off", "low", "medium", "high"]}),
+    ("x-preview-f-free", {"context": 1000000, "max_output": 32768, "vision": True,
+                          "reasoning": ["off", "low", "medium", "high"]}),
+    ("mimo-v2-pro-free", {"context": 1048576, "max_output": 32768, "vision": False,
+                          "reasoning": ["off", "low", "medium", "high"]}),
+    ("mimo-v2.6", {"context": 1048576, "max_output": 32768, "vision": False,
+                   "reasoning": ["off", "low", "medium", "high"]}),
+    ("mimo-v2", {"context": 1048576, "max_output": 32768, "vision": False,
+                 "reasoning": ["off", "low", "medium", "high"]}),
+    ("nemotron-3.5-super-vl-free", {"context": 1048576, "max_output": 32768,
+                                    "vision": True,
+                                    "reasoning": ["off", "low", "medium", "high"]}),
+    ("nemotron-3-ultra-free", {"context": 1000000, "max_output": 32768,
+                               "vision": False,
+                               "reasoning": ["off", "low", "medium", "high"]}),
+    ("minimax-m3.1-flash-free", {"context": 1000000, "max_output": 32768,
+                                 "vision": True,
+                                 "reasoning": ["off", "low", "medium", "high"]}),
+    ("muse-spark-1.2", {"context": 1048576, "max_output": 32768, "vision": True,
+                        "reasoning": ["off", "low", "medium", "high"]}),
+    ("muse-spark-1.3", {"context": 1048576, "max_output": 32768, "vision": True,
+                        "reasoning": ["off", "low", "medium", "high"]}),
+    ("muse-wonder", {"context": 1048576, "max_output": 32768, "vision": True,
+                     "reasoning": ["off", "low", "medium", "high"]}),
+    ("iceman-contributor-free", {"context": 1048576, "max_output": 32768,
+                                 "vision": False,
+                                 "reasoning": ["off", "low", "medium", "high"]}),
+
+    # —— 256K / 262K 档 ——
+    ("flint-40b-free", {"context": 262144, "max_output": 32768, "vision": False,
+                        "reasoning": ["off", "low", "medium", "high"]}),
+    ("nemotron-3.5-lightning-free", {"context": 262144, "max_output": 32768,
+                                     "vision": False,
+                                     "reasoning": ["off", "low", "medium", "high"]}),
+    ("north-mini-code-free", {"context": 256000, "max_output": 32768,
+                              "vision": False,
+                              "reasoning": ["off", "low", "medium", "high"]}),
+    ("kimi-k2.5-free", {"context": 256000, "max_output": 32768, "vision": False,
+                        "reasoning": ["off", "low", "medium", "high"]}),
+
+    # —— 200K / 204K 档 ——
+    ("deepseek-v4.1-flash-free", {"context": 200000, "max_output": 32768,
+                                  "vision": True,
+                                  "reasoning": ["off", "low", "medium", "high"]}),
+    ("deepseek-v4-flash-free", {"context": 200000, "max_output": 32768,
+                                "vision": False,
+                                "reasoning": ["off", "low", "medium", "high"]}),
+    ("big-pickle", {"context": 200000, "max_output": 32768, "vision": False,
+                    "reasoning": ["off", "low", "medium", "high"]}),
+    ("minimax-m2.1-free", {"context": 204800, "max_output": 32768, "vision": False,
+                           "reasoning": ["off", "low", "medium", "high"]}),
+    ("minimax-m2.5-free", {"context": 204800, "max_output": 32768, "vision": False,
+                           "reasoning": ["off", "low", "medium", "high"]}),
+    ("nemotron-3-super-free", {"context": 204800, "max_output": 32768,
+                               "vision": False,
+                               "reasoning": ["off", "low", "medium", "high"]}),
+    ("minimax-m3-free", {"context": 200000, "max_output": 32768, "vision": True,
+                         "reasoning": ["off", "low", "medium", "high"]}),
+
+    # —— GLM 免费档（OpenCode 侧同名，能力与官方一致）——
+    ("glm-5.3-flash-free", {"context": 200000, "max_output": 65536, "vision": True,
+                            "reasoning": ["off", "low", "medium", "high"]}),
+    ("glm-4.7-free", {"context": 200000, "max_output": 32768, "vision": False,
+                      "reasoning": ["off", "low", "medium", "high"]}),
+    ("glm-4.7-flash-free", {"context": 200000, "max_output": 32768, "vision": False,
+                            "reasoning": ["off", "low", "medium", "high"]}),
+    ("glm-4.6v-flash-free", {"context": 128000, "max_output": 16384, "vision": True,
+                             "reasoning": ["off"]}),
+    ("glm-5-free", {"context": 200000, "max_output": 65536, "vision": True,
+                    "reasoning": ["off", "low", "medium", "high"]}),
+
+    # —— 其它免费档 ——
+    ("kat-coder-pro-v1-free", {"context": 262144, "max_output": 32768,
+                               "vision": False, "reasoning": ["off"]}),
+    ("ling-flash-free", {"context": 131072, "max_output": 16384, "vision": False,
+                         "reasoning": ["off"]}),
+    ("ring-1t-free", {"context": 131072, "max_output": 16384, "vision": False,
+                      "reasoning": ["off", "low", "medium", "high"]}),
+    ("ll-alpha-free", {"context": 131072, "max_output": 16384, "vision": False,
+                       "reasoning": ["off"]}),
+    ("space-bunny-free", {"context": 131072, "max_output": 16384, "vision": False,
+                          "reasoning": ["off"]}),
+    ("step-3.5-flash-free", {"context": 262144, "max_output": 32768,
+                             "vision": False, "reasoning": ["off"]}),
+    ("step-5-preview-free", {"context": 262144, "max_output": 32768,
+                             "vision": False, "reasoning": ["off"]}),
+    ("trinity-large-preview-free", {"context": 131072, "max_output": 16384,
+                                    "vision": False, "reasoning": ["off"]}),
+    ("coding-glm-4.7-free", {"context": 200000, "max_output": 32768,
+                             "vision": False,
+                             "reasoning": ["off", "low", "medium", "high"]}),
+    ("coding-glm-5-free", {"context": 200000, "max_output": 65536, "vision": True,
+                           "reasoning": ["off", "low", "medium", "high"]}),
+    ("coding-minimax-m2.1-free", {"context": 204800, "max_output": 32768,
+                                  "vision": False, "reasoning": ["off"]}),
+]
+
 BUILTIN_CAPS: list = [
     # DeepSeek
     ("deepseek-v4.1-flash", {"context": 128000, "max_output": 32768, "vision": False,
@@ -105,10 +218,17 @@ def caps_for(model: str, override: dict | None = None,
     """
     name = str(model or "").lower()
     hit = None
-    for frag, caps in BUILTIN_CAPS:
+    # OpenCode 自营模型名会撞上通用家族名（如 deepseek-v4.1-flash-free），
+    # 所以先查更具体的表
+    for frag, caps in OPENCODE_CAPS:
         if frag in name:
             hit = caps
             break
+    if hit is None:
+        for frag, caps in BUILTIN_CAPS:
+            if frag in name:
+                hit = caps
+                break
     base = dict(hit or DEFAULT_CAPS)
     base["known"] = hit is not None
     base["source"] = "builtin" if hit else "guess"
