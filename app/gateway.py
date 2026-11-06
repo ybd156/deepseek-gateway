@@ -350,6 +350,7 @@ def load_config() -> None:
             "model": str(it.get("model", "") or ""),
             "models": as_list(it.get("models")),
             "model_contains": str(it.get("model_contains", "") or ""),
+            "model_passthrough": bool(it.get("model_passthrough", False)),
             "strict_model": bool(it.get("strict_model", False)),
             "api_key": str(key or ""),
             "key_env": env_name,
@@ -650,11 +651,13 @@ def apply_request_policy(payload: dict) -> tuple:
                               f"要放行请到「高级」页把它加进白名单，或清空白名单。")
 
     # 3) 模型映射：客户端名 → 上游真名
+    payload["_route_model"] = model
     mapping = policy.parse_map(RUNTIME["model_mapping"])
     if model and mapping:
         mapped, changed = policy.map_model(mapping, model)
         if changed:
-            payload["model"] = mapped
+            # 路由仍按客户端原名匹配上游，出站才换成映射后的真名
+            payload["_mapped_model"] = mapped
 
     # 4) 系统提示词
     text = RUNTIME["system_text"]
@@ -696,11 +699,61 @@ def apply_request_policy(payload: dict) -> tuple:
     return payload, None
 
 
+def _tail(name: str) -> str:
+    """取模型名的最后一段：opencode/deepseek-v4.1-flash-free → deepseek-v4.1-flash-free"""
+    return str(name or "").strip().split("/")[-1].lower()
+
+
+def declared_models(p: dict) -> list:
+    """这个上游声明支持的全部模型名（默认 + 更多模型）。"""
+    out = []
+    for m in [p.get("model")] + list(p.get("models") or []):
+        m = str(m or "").strip()
+        if m and m not in out:
+            out.append(m)
+    return out
+
+
+def can_serve(p: dict, want: str) -> bool:
+    """这个上游能不能处理客户端点名的模型。"""
+    if not want:
+        return True
+    if p.get("model_passthrough"):
+        return True
+    w = want.strip().lower()
+    wt = _tail(w)
+    for m in declared_models(p):
+        if m.lower() == w:
+            return True
+        # 允许省略 provider 前缀（deepseek-v4.1-flash-free ≈ opencode/deepseek-v4.1-flash-free）
+        if _tail(m) == wt:
+            return True
+    return False
+
+
 def pick_model(p: dict, payload: dict) -> str:
+    """决定真正发给上游的模型名。
+
+    客户端点名了就必须发它（或它在该上游的完整名），绝不悄悄换成默认模型。
+    """
+    mapped = str(payload.get("_mapped_model") or "").strip()
+    if mapped:
+        return mapped                     # 用户明确映射过，照办
     want = str(payload.get("model") or "").strip()
-    if want and (want == p["model"] or want in (p.get("models") or [])):
+    if not want:
+        return p["model"] or ((p.get("models") or [""])[0])
+
+    w = want.lower()
+    wt = _tail(w)
+    for m in declared_models(p):
+        if m.lower() == w or _tail(m) == wt:
+            return m                      # 用声明里的完整名
+    if p.get("model_passthrough"):
         return want
-    return p["model"] or ((p.get("models") or [""])[0])
+    raise ProviderError(
+        f"上游「{p['name']}」没有模型 {want}。它支持："
+        + "、".join(declared_models(p)[:6])
+        + ("（可在上游卡片里勾「允许任意模型名」强制透传）"))
 
 
 def headers_for(p: dict, stream: bool) -> dict:
@@ -979,6 +1032,7 @@ def call_opencode_cli(p: dict, payload: dict) -> tuple:
     data = _wrap_openai(model, text, max(1, len(prompt) // 3),
                         max(1, len(text) // 3))
     data["_gateway_ms"] = ms
+    data["_upstream"] = model_arg
     return data, ""
 
 
@@ -998,11 +1052,13 @@ def call_provider(p: dict, payload: dict) -> tuple:
         except OpenCodeError as exc:
             raise ProviderError(str(exc)) from None
         upstream = str(data.pop("_upstream_model", "") or data.get("model") or "")
+        data["_upstream"] = pick_model(p, payload)
         return data, check_model(p, {"model": upstream})
 
     proto = (p.get("protocol") or "").lower()
     if proto in ALT_PROTOCOLS:
         data = ALT_PROTOCOLS[proto](p, payload)
+        data["_upstream"] = pick_model(p, payload)
         return data, check_model(p, data)
 
     stream = bool(payload.get("stream"))
@@ -1035,6 +1091,7 @@ def call_provider(p: dict, payload: dict) -> tuple:
     except Exception:
         raise ProviderError("上游返回的不是 JSON：" +
                             raw[:160].decode("utf-8", "ignore")) from None
+    data["_upstream"] = body["model"]
     return data, check_model(p, data)
 
 
@@ -1073,6 +1130,17 @@ def skip_report() -> list:
     return out
 
 
+def all_models() -> list:
+    """全站能点的模型名（去重，保持顺序）。"""
+    seen, out = set(), []
+    for p in PROVIDERS:
+        for m in declared_models(p):
+            if m.lower() not in seen:
+                seen.add(m.lower())
+                out.append(m)
+    return out
+
+
 def candidates(strategy: str, want_model: str = "") -> list:
     used = used_tokens()
     with STATE_LOCK:
@@ -1083,13 +1151,17 @@ def candidates(strategy: str, want_model: str = "") -> list:
             and STATE.get(p["name"], {}).get("cooldown_until", 0) <= now()
             and not is_exhausted(p, used)
         ]
+    if want_model:
+        # 点名了模型：只留真能处理它的上游，不拿默认模型凑数
+        live = [p for p in live if can_serve(p, want_model)]
     if strategy == "cheapest":
         live.sort(key=lambda p: (p["price_in"] + p["price_out"], p["priority"]))
     else:
         live.sort(key=lambda p: p["priority"])
     if want_model:
-        live.sort(key=lambda p: 0 if (want_model == p["model"] or
-                                      want_model in (p.get("models") or [])) else 1)
+        # 声明里精确有的排前面（比 passthrough 更可信）
+        w = want_model.strip().lower()
+        live.sort(key=lambda p: 0 if any(m.lower() == w for m in declared_models(p)) else 1)
     return live
 
 
@@ -1212,11 +1284,11 @@ class Handler(BaseHTTPRequestHandler):
                 return
             seen, data = set(), []
             for p in PROVIDERS:
-                for mid in [p["model"]] + list(p.get("models") or []):
-                    mid = str(mid or "").strip()
-                    if not mid or mid in seen:
+                for mid in declared_models(p):
+                    key = mid.lower()
+                    if key in seen:
                         continue
-                    seen.add(mid)
+                    seen.add(key)
                     data.append({"id": mid, "object": "model", "owned_by": p["name"]})
             self.send_json(200, {"object": "list", "data": data})
             return
@@ -1661,7 +1733,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json(err[0], {"error": {"message": err[1],
                                               "type": "policy_rejected"}})
             return
-        want = str(payload.get("model") or "").strip()
+        want = str(payload.get("_route_model") or payload.get("model") or "").strip()
 
         payload["_echo_model"] = original_model
         if payload.get("stream"):
@@ -1688,7 +1760,8 @@ class Handler(BaseHTTPRequestHandler):
                            "client_ip": client_ip(self),
                            "user_agent": self.headers.get("User-Agent") or "",
                            "effort": str(payload.get("reasoning_effort") or ""),
-                           "upstream_model": str(data.get("model") or p["model"]),
+                           "upstream_model": str(data.get("_upstream")
+                                                 or p["model"]),
                            "request_id": str(data.get("id") or ""),
                            "status": 200,
                        })
@@ -1696,7 +1769,9 @@ class Handler(BaseHTTPRequestHandler):
                 echo = payload.get("_echo_model") or ""
                 if echo:
                     data["model"] = echo
-                extra = {"X-Gateway-Provider": p["name"]}
+                extra = {"X-Gateway-Provider": p["name"],
+                         "X-Gateway-Upstream-Model": str(
+                             data.pop("_upstream", "") or p["model"])}
                 if warn:
                     extra["X-Gateway-Warning"] = "model-mismatch"
                 caps = payload.get("_caps") or {}
@@ -1719,6 +1794,15 @@ class Handler(BaseHTTPRequestHandler):
                 last = msg
 
         if not tried:
+            if want and not candidates(strategy, want):
+                avail = all_models()
+                head = (f"没有上游支持模型 {want}。可用模型："
+                        + "、".join(avail[:12])
+                        + ("…" if len(avail) > 12 else "")
+                        + "　（在上游卡片里勾「允许任意模型名」可以强制透传）")
+                self.send_json(400, {"error": {"message": head,
+                                               "type": "model_not_found"}})
+                return
             head = "没有可用上游。" + "；".join(skip_report()[:8])
         else:
             head = f"所有上游均失败：{last}（已尝试：{', '.join(tried)}）"
@@ -1771,6 +1855,14 @@ class Handler(BaseHTTPRequestHandler):
                            int(u.get("completion_tokens") or 0)),
                    True, int((now() - t0) * 1000), warn)
             mark_ok(p)
+            return
+        if want and not candidates(strategy, want):
+            avail = all_models()
+            head = (f"没有上游支持模型 {want}。可用模型："
+                    + "、".join(avail[:12])
+                    + ("…" if len(avail) > 12 else ""))
+            self.send_json(400, {"error": {"message": head,
+                                           "type": "model_not_found"}})
             return
         head = "没有可用上游。" + "；".join(skip_report()[:8])
         self.send_json(502, {"error": {"message": head, "type": "gateway_error"}})
