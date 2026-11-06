@@ -30,6 +30,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from opencode_supervisor import OpenCodeSupervisor
 from opencode_upstream import OpenCodeClient, OpenCodeError
 from proxy_support import build_opener
+import policy
 
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 WEB_DIR = os.path.join(APP_DIR, "web")
@@ -55,6 +56,15 @@ DEFAULT_TIMEOUT = 180
 # ─────────────────────────── 小工具 ───────────────────────────
 def now() -> float:
     return time.time()
+
+
+def _num(value, default, low, high):
+    """把配置里的数字夹到合法范围。"""
+    try:
+        n = int(float(value))
+    except Exception:
+        return default
+    return max(low, min(n, high))
 
 
 def as_list(value) -> list:
@@ -140,6 +150,28 @@ RUNTIME = {
     "sanitize_scope": "all",
     "sanitize_words": [],
     "sanitize_replacement": "该服务",
+    # 超时（秒）
+    "timeout_short": 120,        # 探测 / 列模型这类短请求
+    "timeout_first_byte": 120,   # 聊天等首字节
+    "timeout_stream_idle": 300,  # 流式两段之间的最长间隔
+    # 出站身份
+    "user_agent": "",
+    # 模型准入
+    "model_blacklist": "",
+    "model_whitelist": "",
+    "model_mapping": "",
+    "model_caps": {},
+    # 提示词
+    "system_mode": "passthrough",
+    "system_text": "",
+    "system_file": "",
+    "keep_rounds": 0,
+    # 思考档位
+    "effort_enabled": True,
+    "effort_default": "max",
+    "effort_mode": "client",
+    # 日志
+    "log_source": True,
 }
 STATE: dict = {}
 STATE_LOCK = threading.Lock()
@@ -205,6 +237,23 @@ def load_runtime() -> None:
         sanitize_words=as_list(data.get("sanitize_words")),
         sanitize_replacement=str(data.get("sanitize_replacement")
                                  or "该服务").strip() or "该服务",
+        timeout_short=_num(data.get("timeout_short"), 120, 5, 3600),
+        timeout_first_byte=_num(data.get("timeout_first_byte"), 120, 5, 3600),
+        timeout_stream_idle=_num(data.get("timeout_stream_idle"), 300, 5, 3600),
+        user_agent=str(data.get("user_agent") or "").strip(),
+        model_blacklist=str(data.get("model_blacklist") or ""),
+        model_whitelist=str(data.get("model_whitelist") or ""),
+        model_mapping=str(data.get("model_mapping") or ""),
+        model_caps=(data.get("model_caps") if isinstance(data.get("model_caps"), dict)
+                    else {}),
+        system_mode=str(data.get("system_mode") or "passthrough").lower(),
+        system_text=str(data.get("system_text") or ""),
+        system_file=str(data.get("system_file") or "").strip(),
+        keep_rounds=_num(data.get("keep_rounds"), 0, 0, 500),
+        effort_enabled=bool(data.get("effort_enabled", True)),
+        effort_default=str(data.get("effort_default") or "max").lower(),
+        effort_mode=str(data.get("effort_mode") or "client").lower(),
+        log_source=bool(data.get("log_source", True)),
     )
 
 
@@ -336,14 +385,31 @@ def init_db() -> None:
         """CREATE TABLE IF NOT EXISTS usage(
                ts REAL, provider TEXT, model TEXT,
                tokens_in INTEGER, tokens_out INTEGER,
-               cost REAL, ok INTEGER, ms INTEGER, err TEXT, token_id TEXT)"""
+               cost REAL, ok INTEGER, ms INTEGER, err TEXT, token_id TEXT,
+               first_byte_ms INTEGER DEFAULT 0, stream INTEGER DEFAULT 0,
+               cache_hit INTEGER DEFAULT 0, cache_miss INTEGER DEFAULT 0,
+               client_ip TEXT DEFAULT '', user_agent TEXT DEFAULT '',
+               effort TEXT DEFAULT '', upstream_model TEXT DEFAULT '',
+               request_id TEXT DEFAULT '', status INTEGER DEFAULT 200)"""
     )
     cols = [r[1] for r in conn.execute("PRAGMA table_info(usage)").fetchall()]
-    if "token_id" not in cols:
-        try:
-            conn.execute("ALTER TABLE usage ADD COLUMN token_id TEXT DEFAULT ''")
-        except Exception:
-            pass
+    for col, ddl in (
+            ("token_id", "TEXT DEFAULT ''"),
+            ("first_byte_ms", "INTEGER DEFAULT 0"),
+            ("stream", "INTEGER DEFAULT 0"),
+            ("cache_hit", "INTEGER DEFAULT 0"),
+            ("cache_miss", "INTEGER DEFAULT 0"),
+            ("client_ip", "TEXT DEFAULT ''"),
+            ("user_agent", "TEXT DEFAULT ''"),
+            ("effort", "TEXT DEFAULT ''"),
+            ("upstream_model", "TEXT DEFAULT ''"),
+            ("request_id", "TEXT DEFAULT ''"),
+            ("status", "INTEGER DEFAULT 200")):
+        if col not in cols:
+            try:
+                conn.execute(f"ALTER TABLE usage ADD COLUMN {col} {ddl}")
+            except Exception:
+                pass
     conn.commit()
     conn.close()
 
@@ -353,16 +419,30 @@ _QUOTA_CACHE: dict = {"ts": 0.0, "data": {}}
 
 
 def record(provider: str, model: str, tin: int, tout: int, cost: float,
-           ok: bool, ms: int, error: str = "", token_id: str = "") -> None:
+           ok: bool, ms: int, error: str = "", token_id: str = "",
+           extra: dict | None = None) -> None:
+    """记一笔。extra 可带首字延迟、缓存、来源、请求 ID 等。"""
     if not token_id:
         token_id = getattr(_CURRENT, "token_id", "")
+    e = extra or {}
     try:
         conn = sqlite3.connect(DB_PATH, timeout=5)
         conn.execute(
             "INSERT INTO usage(ts, provider, model, tokens_in, tokens_out,"
-            " cost, ok, ms, err, token_id) VALUES (?,?,?,?,?,?,?,?,?,?)",
+            " cost, ok, ms, err, token_id, first_byte_ms, stream,"
+            " cache_hit, cache_miss, client_ip, user_agent, effort,"
+            " upstream_model, request_id, status)"
+            " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (now(), provider, model, int(tin), int(tout), float(cost),
-             1 if ok else 0, int(ms), (error or "")[:300], token_id),
+             1 if ok else 0, int(ms), (error or "")[:300], token_id,
+             int(e.get("first_byte_ms") or 0), 1 if e.get("stream") else 0,
+             int(e.get("cache_hit") or 0), int(e.get("cache_miss") or 0),
+             str(e.get("client_ip") or "")[:64],
+             str(e.get("user_agent") or "")[:200],
+             str(e.get("effort") or "")[:16],
+             str(e.get("upstream_model") or "")[:120],
+             str(e.get("request_id") or "")[:40],
+             int(e.get("status") or (200 if ok else 502))),
         )
         conn.commit()
         conn.close()
@@ -419,6 +499,37 @@ def is_exhausted(p: dict, used: dict) -> bool:
     if not p["free_only"] or p["free_quota_tokens"] <= 0:
         return False
     return used.get(p["name"], 0) >= p["free_quota_tokens"]
+
+
+def usage_of(data: dict) -> dict:
+    """从上游响应里抽 tokens / 缓存命中（兼容 OpenAI 与 Anthropic 口径）。"""
+    u = data.get("usage") or {}
+    tin = int(u.get("prompt_tokens") or u.get("input_tokens") or 0)
+    tout = int(u.get("completion_tokens") or u.get("output_tokens") or 0)
+
+    hit = 0
+    details = u.get("prompt_tokens_details") or {}
+    if isinstance(details, dict):
+        hit = int(details.get("cached_tokens") or 0)
+    if not hit:
+        hit = int(u.get("cache_read_input_tokens") or 0)
+    if not hit:
+        hit = int(u.get("cached_tokens") or 0)
+    miss = max(0, tin - hit)
+    return {"in": tin, "out": tout, "cache_hit": hit, "cache_miss": miss}
+
+
+def client_ip(handler) -> str:
+    """取真实来源 IP：优先 X-Forwarded-For 首个，否则用连接对端。"""
+    fwd = handler.headers.get("X-Forwarded-For") or ""
+    if fwd:
+        first = fwd.split(",")[0].strip()
+        if first:
+            return first
+    try:
+        return str(handler.client_address[0])
+    except Exception:
+        return ""
 
 
 def cost_of(p: dict, tin: int, tout: int) -> float:
@@ -519,6 +630,72 @@ class ProviderError(Exception):
     """上游调用失败。"""
 
 
+def apply_request_policy(payload: dict) -> tuple:
+    """按面板策略改写请求。返回 (新 payload, 错误或 None)。"""
+    msgs = payload.get("messages")
+    if not isinstance(msgs, list):
+        msgs = []
+    model = str(payload.get("model") or "").strip()
+
+    # 1) 黑名单：直接拒
+    black = policy.parse_rules(RUNTIME["model_blacklist"])
+    if model and policy.rule_hits(black, model):
+        return payload, (400, f"模型 {model} 在网关黑名单里，已拒绝。"
+                              f"要放行请到「高级」页删掉这条规则。")
+
+    # 2) 白名单：非空时只放行名单内的
+    white = policy.parse_rules(RUNTIME["model_whitelist"])
+    if white and model and not policy.rule_hits(white, model):
+        return payload, (400, f"模型 {model} 不在白名单里，已拒绝。"
+                              f"要放行请到「高级」页把它加进白名单，或清空白名单。")
+
+    # 3) 模型映射：客户端名 → 上游真名
+    mapping = policy.parse_map(RUNTIME["model_mapping"])
+    if model and mapping:
+        mapped, changed = policy.map_model(mapping, model)
+        if changed:
+            payload["model"] = mapped
+
+    # 4) 系统提示词
+    text = RUNTIME["system_text"]
+    fp = RUNTIME["system_file"]
+    if fp:
+        try:
+            with open(fp, encoding="utf-8") as fh:
+                text = fh.read()
+        except Exception:
+            pass
+    payload["messages"] = policy.apply_system(RUNTIME["system_mode"], text, msgs)
+
+    # 5) 只保留最近 N 轮
+    payload["messages"], _ = policy.trim_history(
+        payload["messages"], RUNTIME["keep_rounds"])
+
+    # 6) 上下文窗口：超了就丢最老的对话
+    caps = policy.caps_for(model, (RUNTIME["model_caps"] or {}).get(model))
+    payload["messages"], dropped = policy.fit_context(
+        payload["messages"], caps.get("context") or 0)
+
+    # 7) 图片：模型不支持就别发，给个明白话
+    if policy.has_image(payload["messages"]) and not caps.get("vision"):
+        return payload, (400, f"模型 {model} 不支持图片输入（上下文 "
+                              f"{caps.get('context')} tokens）。"
+                              f"请换一个支持视觉的模型，或去掉图片。")
+
+    # 8) 思考档位
+    if RUNTIME["effort_enabled"]:
+        want = payload.get("reasoning_effort") or ""
+        eff, _note = policy.resolve_effort(
+            model, want, RUNTIME["effort_default"], RUNTIME["effort_mode"], caps)
+        if eff and eff != "off":
+            payload["reasoning_effort"] = eff
+        elif eff == "off":
+            payload.pop("reasoning_effort", None)
+
+    payload["_caps"] = caps
+    return payload, None
+
+
 def pick_model(p: dict, payload: dict) -> str:
     want = str(payload.get("model") or "").strip()
     if want and (want == p["model"] or want in (p.get("models") or [])):
@@ -533,20 +710,31 @@ def headers_for(p: dict, stream: bool) -> dict:
     }
     if p["api_key"]:
         head["Authorization"] = "Bearer " + p["api_key"]
+    ua = RUNTIME.get("user_agent") or ""
+    if ua:
+        head["User-Agent"] = ua
     if "openrouter.ai" in p["base_url"]:
         head["HTTP-Referer"] = SETTINGS.get("site_url", "http://fnos.local")
         head["X-Title"] = SETTINGS.get("site_name", "fnos-ai-gateway")
     return head
 
 
+def chat_timeout(p: dict) -> float:
+    """聊天请求用「首字节超时」，但不超过该上游自己的 timeout。"""
+    return float(min(p["timeout"], RUNTIME["timeout_first_byte"]))
+
+
 def _http_json(p: dict, url: str, headers: dict, body: dict) -> dict:
     req = urllib.request.Request(
         url, data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
         headers=headers, method="POST")
-    opener = build_opener(p.get("proxy") or RUNTIME.get("proxy") or "", p["timeout"])
+    to = chat_timeout(p)
+    opener = build_opener(p.get("proxy") or RUNTIME.get("proxy") or "", to)
     try:
-        resp = opener.open(req, timeout=p["timeout"]) if opener else \
-            urllib.request.urlopen(req, timeout=p["timeout"])
+        if opener is not None:
+            resp = opener.open(req, timeout=to)
+        else:
+            resp = urllib.request.urlopen(req, timeout=to)
         try:
             raw = resp.read()
         finally:
@@ -829,10 +1017,13 @@ def call_provider(p: dict, payload: dict) -> tuple:
         p["base_url"] + "/chat/completions",
         data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
         headers=headers_for(p, stream), method="POST")
-    opener = build_opener(p.get("proxy") or RUNTIME.get("proxy") or "", p["timeout"])
+    to = chat_timeout(p)
+    opener = build_opener(p.get("proxy") or RUNTIME.get("proxy") or "", to)
     try:
-        resp = opener.open(req, timeout=p["timeout"]) if opener else \
-            urllib.request.urlopen(req, timeout=p["timeout"])
+        if opener is not None:
+            resp = opener.open(req, timeout=to)
+        else:
+            resp = urllib.request.urlopen(req, timeout=to)
         try:
             raw = resp.read()
         finally:
@@ -1043,6 +1234,18 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path == "/admin/api/logs":
             self._logs()
+            return
+        if path == "/admin/api/errors":
+            if not is_admin(self):
+                self.send_json(401, {"error": "unauthorized"})
+                return
+            self.send_json(200, errors_payload())
+            return
+        if path == "/admin/api/caps":
+            if not is_admin(self):
+                self.send_json(401, {"error": "unauthorized"})
+                return
+            self.send_json(200, caps_payload())
             return
         if path == "/admin/api/stats":
             if not is_admin(self):
@@ -1394,18 +1597,36 @@ class Handler(BaseHTTPRequestHandler):
             conn = sqlite3.connect(DB_PATH, timeout=5)
             cur = conn.execute(
                 "SELECT ts, provider, model, tokens_in, tokens_out, cost, ok, ms,"
-                " err, token_id FROM usage ORDER BY ts DESC LIMIT ?", (limit,))
+                " err, token_id, first_byte_ms, stream, cache_hit, cache_miss,"
+                " client_ip, user_agent, effort, upstream_model, request_id, status"
+                " FROM usage ORDER BY ts DESC LIMIT ?", (limit,))
             for r in cur.fetchall():
+                tin, tout = int(r[3] or 0), int(r[4] or 0)
+                ms, fb = int(r[7] or 0), int(r[10] or 0)
+                gen_ms = max(1, ms - fb) if fb else ms
                 rows.append({
                     "ts": float(r[0] or 0),
                     "time": time.strftime("%m-%d %H:%M:%S", time.localtime(r[0] or 0)),
                     "provider": r[1] or "",
                     "model": r[2] or "",
-                    "tokens_in": int(r[3] or 0),
-                    "tokens_out": int(r[4] or 0),
+                    "tokens_in": tin,
+                    "tokens_out": tout,
                     "cost": float(r[5] or 0),
                     "ok": bool(r[6]),
-                    "ms": int(r[7] or 0),
+                    "status": int(r[19] or (200 if r[6] else 502)),
+                    "ms": ms,
+                    "first_byte_ms": fb,
+                    "tps": round(tout / (gen_ms / 1000.0), 1) if tout and gen_ms else 0,
+                    "stream": bool(r[11]),
+                    "cache_hit": int(r[12] or 0),
+                    "cache_miss": int(r[13] or 0),
+                    "cache_rate": (round(int(r[12] or 0) * 100.0 / tin, 2)
+                                   if tin else 0),
+                    "client_ip": r[14] or "",
+                    "user_agent": r[15] or "",
+                    "effort": r[16] or "",
+                    "upstream_model": r[17] or "",
+                    "request_id": r[18] or "",
                     "err": r[8] or "",
                     "token": names.get(str(r[9] or ""), "（主口令）" if not r[9] else "已删除"),
                 })
@@ -1432,8 +1653,17 @@ class Handler(BaseHTTPRequestHandler):
                     or RUNTIME["strategy"] or "priority").lower()
         if strategy not in ("priority", "cheapest"):
             strategy = "priority"
+
+        # 客户端原始点名的模型，响应里要原样回显
+        original_model = str(payload.get("model") or "").strip()
+        payload, err = apply_request_policy(payload)
+        if err:
+            self.send_json(err[0], {"error": {"message": err[1],
+                                              "type": "policy_rejected"}})
+            return
         want = str(payload.get("model") or "").strip()
 
+        payload["_echo_model"] = original_model
         if payload.get("stream"):
             self._stream(payload, strategy, want)
         else:
@@ -1446,22 +1676,46 @@ class Handler(BaseHTTPRequestHandler):
             t0 = now()
             try:
                 data, warn = call_provider(p, payload)
-                u = data.get("usage") or {}
-                tin = int(u.get("prompt_tokens") or 0)
-                tout = int(u.get("completion_tokens") or 0)
-                record(p["name"], p["model"], tin, tout,
-                       cost_of(p, tin, tout), True, int((now() - t0) * 1000), warn)
+                u = usage_of(data)
+                ms = int((now() - t0) * 1000)
+                record(p["name"], payload.get("_echo_model") or p["model"],
+                       u["in"], u["out"], cost_of(p, u["in"], u["out"]),
+                       True, ms, warn, extra={
+                           "first_byte_ms": ms,
+                           "stream": 0,
+                           "cache_hit": u["cache_hit"],
+                           "cache_miss": u["cache_miss"],
+                           "client_ip": client_ip(self),
+                           "user_agent": self.headers.get("User-Agent") or "",
+                           "effort": str(payload.get("reasoning_effort") or ""),
+                           "upstream_model": str(data.get("model") or p["model"]),
+                           "request_id": str(data.get("id") or ""),
+                           "status": 200,
+                       })
                 mark_ok(p)
+                echo = payload.get("_echo_model") or ""
+                if echo:
+                    data["model"] = echo
                 extra = {"X-Gateway-Provider": p["name"]}
                 if warn:
                     extra["X-Gateway-Warning"] = "model-mismatch"
+                caps = payload.get("_caps") or {}
+                if caps:
+                    extra["X-Gateway-Context"] = str(caps.get("context") or "")
                 self.send_json(200, data, extra)
                 return
             except Exception as exc:                   # noqa: BLE001
                 msg = err_text(exc)
                 mark_fail(p)
-                record(p["name"], p["model"], 0, 0, 0.0, False,
-                       int((now() - t0) * 1000), msg)
+                record(p["name"], payload.get("_echo_model") or p["model"],
+                       0, 0, 0.0, False, int((now() - t0) * 1000), msg,
+                       extra={
+                           "client_ip": client_ip(self),
+                           "user_agent": self.headers.get("User-Agent") or "",
+                           "effort": str(payload.get("reasoning_effort") or ""),
+                           "stream": 1 if payload.get("stream") else 0,
+                           "status": 502,
+                       })
                 last = msg
 
         if not tried:
@@ -1476,9 +1730,26 @@ class Handler(BaseHTTPRequestHandler):
             proto = (p.get("protocol") or "").lower()
             # 真流式：OpenAI 兼容的上游直接透传 SSE
             if p["type"] == "http" and proto not in ALT_PROTOCOLS:
-                if self._passthrough(p, payload):
-                    record(p["name"], p["model"], 0, 0, 0.0, True,
-                           int((now() - t0) * 1000))
+                info = {}
+                if self._passthrough(p, payload, info):
+                    ms = int((now() - t0) * 1000)
+                    u = info.get("usage") or {}
+                    tin = int(u.get("prompt_tokens") or 0)
+                    tout = int(u.get("completion_tokens") or 0)
+                    record(p["name"], payload.get("_echo_model") or p["model"],
+                           tin, tout, cost_of(p, tin, tout), True, ms, "",
+                           extra={
+                               "first_byte_ms": int(info.get("first_byte_ms") or 0),
+                               "stream": 1,
+                               "cache_hit": int(info.get("cache_hit") or 0),
+                               "cache_miss": int(info.get("cache_miss") or 0),
+                               "client_ip": client_ip(self),
+                               "user_agent": self.headers.get("User-Agent") or "",
+                               "effort": str(payload.get("reasoning_effort") or ""),
+                               "upstream_model": str(info.get("model") or p["model"]),
+                               "request_id": str(info.get("id") or ""),
+                               "status": 200,
+                           })
                     mark_ok(p)
                     return
                 mark_fail(p)
@@ -1504,8 +1775,9 @@ class Handler(BaseHTTPRequestHandler):
         head = "没有可用上游。" + "；".join(skip_report()[:8])
         self.send_json(502, {"error": {"message": head, "type": "gateway_error"}})
 
-    def _passthrough(self, p: dict, payload: dict) -> bool:
-        """把上游的 SSE 原样转发给客户端。"""
+    def _passthrough(self, p: dict, payload: dict, info: dict | None = None) -> bool:
+        """把上游的 SSE 原样转发给客户端。info 收集首字时间、用量、模型名。"""
+        info = info if info is not None else {}
         body = dict(payload)
         body["model"] = pick_model(p, payload)
         body["stream"] = True
@@ -1516,16 +1788,18 @@ class Handler(BaseHTTPRequestHandler):
             p["base_url"] + "/chat/completions",
             data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
             headers=headers_for(p, True), method="POST")
-        opener = build_opener(p.get("proxy") or RUNTIME.get("proxy") or "", p["timeout"])
+        to = chat_timeout(p)
+        opener = build_opener(p.get("proxy") or RUNTIME.get("proxy") or "", to)
         try:
             if opener is not None:
-                resp = opener.open(req, timeout=p["timeout"])
+                resp = opener.open(req, timeout=to)
             else:
-                resp = urllib.request.urlopen(req, timeout=p["timeout"])
+                resp = urllib.request.urlopen(req, timeout=to)
         except Exception:
             return False
 
         CRLF = bytes([13, 10])
+        t0_pb = now()
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream; charset=utf-8")
         self.send_header("Cache-Control", "no-cache")
@@ -1534,16 +1808,42 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Transfer-Encoding", "chunked")
         self.end_headers()
+        idle = float(RUNTIME["timeout_stream_idle"])
+        try:
+            sk = getattr(getattr(resp, "fp", None), "raw", None)
+            if sk is not None and hasattr(sk, "_sock"):
+                sk._sock.settimeout(idle)
+        except Exception:
+            pass
+        first = 0
         try:
             while True:
                 line = resp.readline()
                 if not line:
                     break
+                if not first:
+                    first = int((now() - t0_pb) * 1000)
+                txt = line.decode("utf-8", "ignore")
+                if txt.startswith("data:") and '"usage"' in txt:
+                    try:
+                        obj = json.loads(txt[5:].strip())
+                        u = obj.get("usage") or {}
+                        if u:
+                            info["usage"] = u
+                            det = u.get("prompt_tokens_details") or {}
+                            info["cache_hit"] = int(det.get("cached_tokens") or 0)
+                        if obj.get("model"):
+                            info["model"] = obj["model"]
+                        if obj.get("id"):
+                            info["id"] = obj["id"]
+                    except Exception:
+                        pass
                 head = ("%x" % len(line)).encode()
                 self.wfile.write(head + CRLF + line + CRLF)
                 self.wfile.flush()
             self.wfile.write(b"0" + CRLF + CRLF)
             self.wfile.flush()
+            info["first_byte_ms"] = first
         except (BrokenPipeError, ConnectionResetError):
             pass
         except Exception:
@@ -1562,6 +1862,13 @@ class Handler(BaseHTTPRequestHandler):
             text = ""
         model = data.get("model") or p["model"]
         cid = data.get("id") or f"chatcmpl-{int(now())}"
+        echo = ""
+        try:
+            echo = str(data.get("_echo_model") or "")
+        except Exception:
+            echo = ""
+        if echo:
+            model = echo
 
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream; charset=utf-8")
@@ -1626,6 +1933,22 @@ def config_snapshot() -> dict:
         "sanitize_scope": RUNTIME["sanitize_scope"],
         "sanitize_words": "、".join(RUNTIME["sanitize_words"]),
         "sanitize_replacement": RUNTIME["sanitize_replacement"],
+        "timeout_short": RUNTIME["timeout_short"],
+        "timeout_first_byte": RUNTIME["timeout_first_byte"],
+        "timeout_stream_idle": RUNTIME["timeout_stream_idle"],
+        "user_agent": RUNTIME["user_agent"],
+        "model_blacklist": RUNTIME["model_blacklist"],
+        "model_whitelist": RUNTIME["model_whitelist"],
+        "model_mapping": RUNTIME["model_mapping"],
+        "model_caps": RUNTIME["model_caps"],
+        "system_mode": RUNTIME["system_mode"],
+        "system_text": RUNTIME["system_text"],
+        "system_file": RUNTIME["system_file"],
+        "keep_rounds": RUNTIME["keep_rounds"],
+        "effort_enabled": RUNTIME["effort_enabled"],
+        "effort_default": RUNTIME["effort_default"],
+        "effort_mode": RUNTIME["effort_mode"],
+        "log_source": RUNTIME["log_source"],
         "providers": provs,
     }
 
@@ -1667,6 +1990,44 @@ def config_save(body: dict) -> dict:
         patch["sanitize_words"] = as_list(body["sanitize_words"])
     if "sanitize_replacement" in body:
         patch["sanitize_replacement"] = str(body["sanitize_replacement"] or "该服务")
+    for key, low, high, dflt in (
+            ("timeout_short", 5, 3600, 120),
+            ("timeout_first_byte", 5, 3600, 120),
+            ("timeout_stream_idle", 5, 3600, 300),
+            ("keep_rounds", 0, 500, 0)):
+        if key in body:
+            patch[key] = _num(body[key], dflt, low, high)
+    if "user_agent" in body:
+        patch["user_agent"] = str(body["user_agent"] or "").strip()
+    for key in ("model_blacklist", "model_whitelist", "model_mapping"):
+        if key in body:
+            patch[key] = str(body[key] or "")
+    if "model_caps" in body and isinstance(body["model_caps"], dict):
+        patch["model_caps"] = body["model_caps"]
+    if "system_mode" in body:
+        sm = str(body["system_mode"] or "passthrough").lower()
+        if sm not in ("passthrough", "default", "append", "prepend", "drop"):
+            raise ValueError("提示词模式只能是 passthrough / default / "
+                             "append / prepend / drop")
+        patch["system_mode"] = sm
+    if "system_text" in body:
+        patch["system_text"] = str(body["system_text"] or "")
+    if "system_file" in body:
+        patch["system_file"] = str(body["system_file"] or "").strip()
+    if "effort_enabled" in body:
+        patch["effort_enabled"] = bool(body["effort_enabled"])
+    if "effort_default" in body:
+        et = str(body["effort_default"] or "max").lower()
+        if et not in ("off", "low", "medium", "high", "max"):
+            raise ValueError("思考档位只能是 off / low / medium / high / max")
+        patch["effort_default"] = et
+    if "effort_mode" in body:
+        em = str(body["effort_mode"] or "client").lower()
+        if em not in ("client", "force", "force+"):
+            raise ValueError("思考档位策略只能是 client / force / force+")
+        patch["effort_mode"] = em
+    if "log_source" in body:
+        patch["log_source"] = bool(body["log_source"])
 
     groups: dict = {}
     names: list = []
@@ -1895,9 +2256,12 @@ def discover_models(p: dict) -> dict:
         head = headers_for(p, False)
         head.pop("Accept", None)
         req = urllib.request.Request(url, headers=head, method="GET")
-        opener = build_opener(p.get("proxy") or RUNTIME.get("proxy") or "", p["timeout"])
-        resp = opener.open(req, timeout=20) if opener else \
-            urllib.request.urlopen(req, timeout=20)
+        to = float(RUNTIME["timeout_short"])
+        opener = build_opener(p.get("proxy") or RUNTIME.get("proxy") or "", to)
+        if opener is not None:
+            resp = opener.open(req, timeout=to)
+        else:
+            resp = urllib.request.urlopen(req, timeout=to)
         try:
             raw = resp.read()
         finally:
@@ -1921,6 +2285,42 @@ def discover_models(p: dict) -> dict:
         return {"ok": True, "count": len(out), "models": out}
     except Exception as exc:                           # noqa: BLE001
         return {"ok": False, "error": err_text(exc)}
+
+
+def caps_payload() -> dict:
+    """列出所有模型及其上下文 / 图片 / 思考档能力。"""
+    seen, rows = set(), []
+    override = RUNTIME["model_caps"] or {}
+    for p in PROVIDERS:
+        for mid in [p["model"]] + list(p.get("models") or []):
+            mid = str(mid or "").strip()
+            if not mid or mid in seen:
+                continue
+            seen.add(mid)
+            caps = policy.caps_for(mid, override.get(mid))
+            rows.append({
+                "model": mid,
+                "provider": p["name"],
+                "context": caps.get("context"),
+                "vision": bool(caps.get("vision")),
+                "reasoning": list(caps.get("reasoning") or []),
+                "known": bool(caps.get("known")),
+                "override": override.get(mid) or {},
+            })
+    rows.sort(key=lambda r: (r["provider"], r["model"]))
+    tiers = [r for r in rows if len(r["reasoning"]) > 1]
+    return {"ok": True, "models": rows, "count": len(rows),
+            "with_reasoning": len(tiers),
+            "vision_count": sum(1 for r in rows if r["vision"]),
+            "default_effort": RUNTIME["effort_default"],
+            "unsupported_default": [
+                {"model": r["model"], "falls_to": policy.resolve_effort(
+                    r["model"], "", RUNTIME["effort_default"],
+                    "force", policy.caps_for(r["model"], override.get(r["model"])))[0]}
+                for r in rows
+                if RUNTIME["effort_default"] not in (r["reasoning"] or [])
+            ],
+            }
 
 
 def stats_payload(days: int = 7) -> dict:
@@ -1964,6 +2364,50 @@ def stats_payload(days: int = 7) -> dict:
     by_prov.sort(key=lambda x: x["tokens_in"] + x["tokens_out"], reverse=True)
     return {"ok": True, "days": days, "daily": daily, "providers": by_prov,
             "totals": totals}
+
+
+def errors_payload(limit: int = 3000) -> dict:
+    """按 上游 × 错误类型 聚合失败，方便一眼看出谁在拖后腿。"""
+    out = {}
+    try:
+        conn = sqlite3.connect(DB_PATH, timeout=5)
+        cur = conn.execute(
+            "SELECT provider, model, status, err, ts, request_id FROM usage"
+            " WHERE ok = 0 ORDER BY ts DESC LIMIT ?", (max(1, limit),))
+        for prov, model, status, err, ts, rid in cur.fetchall():
+            kind = "其它"
+            low = str(err or "").lower()
+            if status == 429 or "429" in low or "rate" in low or "限流" in low:
+                kind = "模型限流"
+            elif "timeout" in low or "超时" in low:
+                kind = "超时"
+            elif "401" in low or "403" in low or "unauthorized" in low:
+                kind = "鉴权失败"
+            elif "econnrefused" in low or "connect" in low:
+                kind = "连不上"
+            elif "额度" in low or "quota" in low or "usage limit" in low:
+                kind = "额度用尽"
+            elif status == 502:
+                kind = "上游 502"
+            key = (prov or "", kind)
+            item = out.setdefault(key, {
+                "provider": prov or "", "kind": kind, "count": 0,
+                "status": status, "last": float(ts or 0),
+                "last_time": time.strftime("%m-%d %H:%M:%S",
+                                           time.localtime(ts or 0)),
+                "sample": str(err or "")[:200], "request_id": rid or "",
+            })
+            item["count"] += 1
+            if float(ts or 0) >= item["last"]:
+                item["last"] = float(ts or 0)
+                item["last_time"] = time.strftime("%m-%d %H:%M:%S",
+                                                  time.localtime(ts or 0))
+                item["sample"] = str(err or "")[:200]
+        conn.close()
+    except Exception as exc:                           # noqa: BLE001
+        return {"ok": False, "error": str(exc)}
+    rows = sorted(out.values(), key=lambda x: (-x["count"], -x["last"]))
+    return {"ok": True, "rows": rows, "kinds": len({r["kind"] for r in rows})}
 
 
 def status_payload() -> dict:
