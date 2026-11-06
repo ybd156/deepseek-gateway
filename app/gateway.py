@@ -88,6 +88,7 @@ PROVIDERS: list[dict] = []
 SETTINGS: dict = {}
 STATE: dict[str, dict] = {}
 STATE_LOCK = threading.Lock()
+_CURRENT = threading.local()      # 当前请求的令牌（线程本地）
 CONFIG_LOCK = threading.Lock()
 
 
@@ -139,6 +140,67 @@ def save_secret(name: str, value: str) -> None:
     except Exception:
         pass
     os.replace(tmp, path)
+
+
+TOKENS_PATH = os.path.join(DATA_DIR, "tokens.json")
+
+
+def load_tokens() -> list[dict]:
+    try:
+        with open(TOKENS_PATH, encoding="utf-8") as fh:
+            data = json.load(fh)
+        return data if isinstance(data, list) else []
+    except Exception:
+        return []
+
+
+def save_tokens(items: list[dict]) -> None:
+    os.makedirs(DATA_DIR, exist_ok=True)
+    tmp = TOKENS_PATH + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump(items, fh, ensure_ascii=False, indent=2)
+    try:
+        os.chmod(tmp, 0o600)
+    except Exception:
+        pass
+    os.replace(tmp, TOKENS_PATH)
+
+
+def new_token_key() -> str:
+    import secrets
+    return "sk-fnos-" + secrets.token_hex(12)
+
+
+def find_token(presented: str) -> dict | None:
+    """按 key 找启用的令牌。"""
+    if not presented:
+        return None
+    for t in load_tokens():
+        if t.get("enabled", True) and str(t.get("key", "")) == presented:
+            return t
+    return None
+
+
+_TOKEN_CACHE: dict = {"ts": 0.0, "data": {}}
+
+
+def token_usage() -> dict:
+    """每个令牌累计消耗的 token（用于额度控制）。"""
+    now = time.time()
+    if now - _TOKEN_CACHE["ts"] < 10:
+        return _TOKEN_CACHE["data"]
+    try:
+        conn = sqlite3.connect(DB_PATH, timeout=5)
+        rows = conn.execute(
+            "SELECT token_id, SUM(tokens_in + tokens_out) FROM usage "
+            "WHERE ok=1 AND token_id != '' GROUP BY token_id").fetchall()
+        conn.close()
+        data = {str(k): int(v or 0) for k, v in rows}
+    except Exception:
+        data = {}
+    _TOKEN_CACHE["ts"] = now
+    _TOKEN_CACHE["data"] = data
+    return data
 
 
 def key_source(key_env: str) -> str:
@@ -308,6 +370,30 @@ def config_save(body: dict) -> dict:
     return config_snapshot()
 
 
+def tokens_payload() -> dict:
+    used = token_usage()
+    out = []
+    for t in load_tokens():
+        key = str(t.get("key", ""))
+        masked = (key[:9] + "****" + key[-4:]) if len(key) > 14 else "****"
+        out.append({
+            "id": t.get("id", ""),
+            "name": t.get("name", ""),
+            "key_masked": masked,
+            "enabled": bool(t.get("enabled", True)),
+            "quota_tokens": int(t.get("quota_tokens") or 0),
+            "used_tokens": used.get(str(t.get("id", "")), 0),
+            "created": t.get("created", 0),
+        })
+    has_master = bool(RUNTIME["gateway_token"])
+    enabled_tokens = [x for x in out if x["enabled"]]
+    return {
+        "tokens": out,
+        "master": has_master,
+        "open_mode": (not has_master and not enabled_tokens),
+    }
+
+
 def provider_key_source(p: dict, sec: dict | None = None) -> str:
     """密钥来源：面板 / 向导 / 配置 / 无 / 本地(opencode) / 免密钥。"""
     if p["type"] == "opencode":
@@ -423,21 +509,33 @@ def init_db() -> None:
         """CREATE TABLE IF NOT EXISTS usage(
                ts REAL, provider TEXT, model TEXT,
                tokens_in INTEGER, tokens_out INTEGER,
-               cost REAL, ok INTEGER, ms INTEGER, err TEXT)"""
+               cost REAL, ok INTEGER, ms INTEGER, err TEXT, token_id TEXT)"""
     )
+    # 老库补列
+    cols = [r[1] for r in conn.execute("PRAGMA table_info(usage)").fetchall()]
+    if "token_id" not in cols:
+        try:
+            conn.execute("ALTER TABLE usage ADD COLUMN token_id TEXT DEFAULT ''")
+        except Exception:
+            pass
     conn.commit()
     conn.close()
 
 
 def record(provider: str, model: str, tin: int, tout: int,
-           cost: float, ok: bool, ms: int, err: str = "") -> None:
+           cost: float, ok: bool, ms: int, err: str = "",
+           token_id: str = "") -> None:
+    if not token_id:
+        token_id = getattr(_CURRENT, "token_id", "")
     try:
         conn = sqlite3.connect(DB_PATH, timeout=5)
         conn.execute(
-            "INSERT INTO usage VALUES (?,?,?,?,?,?,?,?,?)",
+            "INSERT INTO usage(ts, provider, model, tokens_in, tokens_out,"
+            " cost, ok, ms, err, token_id) VALUES (?,?,?,?,?,?,?,?,?,?)",
             (time.time(), provider, model, int(tin), int(tout),
-             float(cost), 1 if ok else 0, int(ms), (err or "")[:300]),
+             float(cost), 1 if ok else 0, int(ms), (err or "")[:300], token_id),
         )
+        _TOKEN_CACHE["ts"] = 0.0
         conn.commit()
         conn.close()
     except Exception:                 # 记账失败不影响主链路
@@ -678,6 +776,36 @@ def authorized(handler: BaseHTTPRequestHandler) -> bool:
     return got == token
 
 
+def auth_v1(handler: BaseHTTPRequestHandler):
+    """OpenAI 兼容接口的鉴权：主口令 / 用户令牌 / 全开放模式。"""
+    auth = handler.headers.get("Authorization", "")
+    presented = auth[7:].strip() if auth.lower().startswith("bearer ") else ""
+    if not presented:
+        presented = handler.headers.get("X-Api-Key", "").strip()
+
+    master = RUNTIME["gateway_token"]
+    tokens = [t for t in load_tokens() if t.get("enabled", True)]
+
+    if master and presented and presented == master:
+        return True, None, ""
+
+    tok = find_token(presented) if presented else None
+    if tok:
+        quota = int(tok.get("quota_tokens") or 0)
+        if quota > 0:
+            used = token_usage().get(str(tok.get("id", "")), 0)
+            if used >= quota:
+                return False, tok, (f"令牌「{tok.get('name', '')}」额度已用尽"
+                                    f"（{used}/{quota} tokens）")
+        return True, tok, ""
+
+    if not master and not tokens:
+        return True, None, ""          # 全开放模式（自己局域网用）
+    if not presented:
+        return False, None, "缺少 API Key：请求头要带 Authorization: Bearer <key>"
+    return False, None, "API Key 无效或已停用"
+
+
 def is_admin(handler: BaseHTTPRequestHandler) -> bool:
     """写操作权限：走网关时要求 NAS 管理员；端口直连 + 口令通过视为管理员。"""
     if getattr(handler.server, "is_gateway", False):
@@ -756,6 +884,11 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json(401, {"error": "unauthorized"})
                 return
             self.send_json(200, SUPERVISOR.status())
+        elif path == "/admin/api/tokens":
+            if not authorized(self):
+                self.send_json(401, {"error": "unauthorized"})
+                return
+            self.send_json(200, tokens_payload())
         elif path == "/v1/models":
             if not authorized(self):
                 self.send_json(401, {"error": "unauthorized"})
@@ -786,6 +919,8 @@ class Handler(BaseHTTPRequestHandler):
             self.handle_save_config()
         elif path == "/admin/api/opencode":
             self.handle_opencode()
+        elif path == "/admin/api/tokens":
+            self.handle_tokens()
         elif path == "/admin/api/reload":
             if not authorized(self):
                 self.send_json(401, {"error": "unauthorized"})
@@ -849,6 +984,69 @@ class Handler(BaseHTTPRequestHandler):
                 "ms": int((time.time() - t0) * 1000),
                 "error": err_text(exc)[:300],
             })
+
+    def handle_tokens(self) -> None:
+        """访问令牌管理：create / toggle / delete / rename。"""
+        if not authorized(self):
+            self.send_json(401, {"error": "unauthorized"})
+            return
+        if not is_admin(self):
+            self.send_json(403, {"ok": False, "error": "只有管理员能管理令牌"})
+            return
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+            body = json.loads(self.rfile.read(length) or b"{}")
+        except Exception:
+            self.send_json(400, {"ok": False, "error": "bad request"})
+            return
+
+        action = str(body.get("action", ""))
+        items = load_tokens()
+
+        if action == "create":
+            import uuid
+            rec = {
+                "id": uuid.uuid4().hex[:12],
+                "name": str(body.get("name") or "未命名")[:60],
+                "key": new_token_key(),
+                "enabled": True,
+                "quota_tokens": max(0, int(body.get("quota_tokens") or 0)),
+                "created": int(time.time()),
+            }
+            items.append(rec)
+            save_tokens(items)
+            payload = tokens_payload()
+            payload.update({"ok": True, "token": {"id": rec["id"], "name": rec["name"],
+                                                  "key": rec["key"]}})
+            self.send_json(200, payload)
+            return
+
+        tid = str(body.get("id", ""))
+        if action in ("toggle", "delete", "rename") and not tid:
+            self.send_json(400, {"ok": False, "error": "缺少 id"})
+            return
+
+        if action == "toggle":
+            for t in items:
+                if t.get("id") == tid:
+                    t["enabled"] = bool(body.get("enabled", not t.get("enabled", True)))
+            save_tokens(items)
+        elif action == "delete":
+            items = [t for t in items if t.get("id") != tid]
+            save_tokens(items)
+        elif action == "rename":
+            for t in items:
+                if t.get("id") == tid:
+                    t["name"] = str(body.get("name") or t.get("name", ""))[:60]
+            save_tokens(items)
+        else:
+            self.send_json(400, {"ok": False,
+                                 "error": "action 只能是 create/toggle/delete/rename"})
+            return
+
+        payload = tokens_payload()
+        payload["ok"] = True
+        self.send_json(200, payload)
 
     def handle_opencode(self) -> None:
         """OpenCode 运行时控制：start / stop / install / log。"""
@@ -1057,10 +1255,12 @@ class Handler(BaseHTTPRequestHandler):
 
     # ---- 主接口 ----
     def handle_chat(self) -> None:
-        if not authorized(self):
-            self.send_json(401, {"error": {"message": "invalid gateway token",
-                                           "type": "unauthorized"}})
+        ok, tok, reason = auth_v1(self)
+        if not ok:
+            code = 429 if "额度已用尽" in reason else 401
+            self.send_json(code, {"error": {"message": reason, "type": "unauthorized"}})
             return
+        _CURRENT.token_id = str((tok or {}).get("id", ""))
         try:
             length = int(self.headers.get("Content-Length") or 0)
             payload = json.loads(self.rfile.read(length) or b"{}")
@@ -1497,6 +1697,21 @@ _SETTINGS_BODY = """
     <pre id="ocLog" style="max-height:170px;overflow:auto;background:#0d1117;border:1px solid var(--line);border-radius:8px;padding:8px;font-size:11px;margin:8px 0 0"></pre>
   </div>
 
+  <h2>访问令牌（给别人用这个网关时）</h2>
+  <div class="prov" style="max-width:920px">
+    <div class="sub" id="tokHint" style="margin-bottom:8px">…</div>
+    <div class="row" style="margin:0 0 8px">
+      <input id="newTokName" placeholder="备注名，如 小明的笔记本" style="flex:1;min-width:180px">
+      <input id="newTokQuota" type="number" placeholder="额度 tokens（0=不限）" style="max-width:200px">
+      <button class="pri" onclick="createTok()">新建令牌</button>
+      <button onclick="loadTokens()">刷新</button>
+    </div>
+    <table>
+      <thead><tr><th>备注</th><th>Key</th><th>已用 tokens</th><th>状态</th><th>操作</th></tr></thead>
+      <tbody id="tokBody"></tbody>
+    </table>
+  </div>
+
   <div class="row">
     <button class="pri" onclick="save()">保存全部</button>
     <button onclick="addPreset('openai')">+ OpenAI 兼容接口</button>
@@ -1716,6 +1931,63 @@ async function ocAction(action){
   }catch(e){ msg('操作失败：' + e.message); }
 }
 
+async function loadTokens(){
+  try{
+    const d = await api('/admin/api/tokens');
+    document.getElementById('tokHint').textContent = d.open_mode
+      ? '⚠ 当前是全开放模式：任何人能访问就能直接调 /v1。建议先设访问口令，或至少建一个令牌。'
+      : (d.master ? '主口令可用；下面是给其他人用的独立令牌（每人一把，可单独停用/限额）'
+                  : '当前只接受下面这些令牌');
+    const rows = (d.tokens || []).map(function(t){
+      const q = t.quota_tokens > 0 ? t.quota_tokens.toLocaleString() : '不限';
+      return '<tr>'
+        + '<td>' + esc(t.name) + '</td>'
+        + '<td class="mono">' + esc(t.key_masked) + '</td>'
+        + '<td class="mono">' + t.used_tokens.toLocaleString() + ' / ' + q + '</td>'
+        + '<td><span class="tag ' + (t.enabled ? 'g' : 'd') + '">'
+        + (t.enabled ? '启用' : '停用') + '</span></td>'
+        + '<td><button data-id="' + esc(t.id) + '" data-on="' + (t.enabled ? '0' : '1')
+        + '" onclick="tokToggle(this)">' + (t.enabled ? '停用' : '启用') + '</button> '
+        + '<button class="danger" data-id="' + esc(t.id) + '" onclick="tokDelete(this)">删除</button></td>'
+        + '</tr>';
+    }).join('');
+    document.getElementById('tokBody').innerHTML =
+      rows || '<tr><td colspan="5" class="sub">还没有令牌</td></tr>';
+  }catch(e){ if(e.message !== 'unauthorized') msg('读取令牌失败：' + e.message); }
+}
+
+async function createTok(){
+  const name = (document.getElementById('newTokName').value || '').trim() || '未命名';
+  const quota = Number(document.getElementById('newTokQuota').value || 0);
+  try{
+    const d = await api('/admin/api/tokens', {method:'POST',
+      body: JSON.stringify({action: 'create', name: name, quota_tokens: quota})});
+    if(d.ok && d.token){
+      msg('已创建（只显示这一次，请复制保存）：' + d.token.key);
+      document.getElementById('newTokName').value = '';
+      document.getElementById('newTokQuota').value = '';
+    } else { msg('创建失败：' + (d.error || '')); }
+  }catch(e){ msg('创建失败：' + e.message); }
+  loadTokens();
+}
+
+async function tokToggle(el){
+  try{
+    await api('/admin/api/tokens', {method:'POST',
+      body: JSON.stringify({action:'toggle', id: el.dataset.id, enabled: el.dataset.on === '1'})});
+  }catch(e){ msg('操作失败：' + e.message); }
+  loadTokens();
+}
+
+async function tokDelete(el){
+  try{
+    await api('/admin/api/tokens', {method:'POST',
+      body: JSON.stringify({action:'delete', id: el.dataset.id})});
+    msg('已删除令牌');
+  }catch(e){ msg('删除失败：' + e.message); }
+  loadTokens();
+}
+
 async function clearTok(){
   try{ await api('/admin/api/set-settings', {method:'POST', body: JSON.stringify({gateway_token:''})});
        localStorage.removeItem('gw_token'); msg('已清除访问口令'); }
@@ -1724,6 +1996,7 @@ async function clearTok(){
 }
 
 loadCfg();
+loadTokens();
 """
 
 
