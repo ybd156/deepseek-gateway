@@ -1832,6 +1832,9 @@ class Handler(BaseHTTPRequestHandler):
             print(f"[gateway] opencode 试一句：base={base} model={model} agent={agent}",
                   flush=True)
             mode = (op or {}).get("opencode_mode") or "server"
+            bin_path = SUPERVISOR.resolve_bin()
+            bin_tag = (os.path.basename(bin_path) + " " +
+                       (SUPERVISOR._version(bin_path) or "?")) if bin_path else "未找到"
             if mode == "cli":
                 try:
                     data, _w = call_opencode_cli(
@@ -1841,12 +1844,12 @@ class Handler(BaseHTTPRequestHandler):
                     text = str(data["choices"][0]["message"]["content"] or "")
                     print(f"[gateway] opencode cli 试一句成功：{text[:60]}", flush=True)
                     self.send_json(200, {**SUPERVISOR.status(), "ok": True,
-                                         "message": f"试通了（cli）：{text[:80]}",
+                                         "message": f"试通了（cli / {bin_tag}）：{text[:80]}",
                                          "probe": {"mode": "cli", "text": text[:400]}})
                 except Exception as exc:            # noqa: BLE001
                     print(f"[gateway] opencode cli 试一句失败：{exc}", flush=True)
                     self.send_json(200, {**SUPERVISOR.status(), "ok": False,
-                                         "message": f"试失败（cli）：{str(exc)[:300]}",
+                                         "message": f"试失败（cli / {bin_tag}）：{str(exc)[:300]}",
                                          "probe": {"mode": "cli", "error": str(exc)[:400]}})
                 return
 
