@@ -10,6 +10,7 @@
 """
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import socket
@@ -157,6 +158,19 @@ class OpenCodeSupervisor:
                 os.makedirs(ws, exist_ok=True)
             except Exception as exc:                # noqa: BLE001
                 return False, f"工作目录不可用：{exc}"
+
+            # headless 场景最怕卡在"工具权限确认"：在 workspace 放一份放行配置
+            cfg_path = os.path.join(ws, "opencode.json")
+            if not os.path.exists(cfg_path):
+                try:
+                    with open(cfg_path, "w", encoding="utf-8") as fh:
+                        json.dump({
+                            "$schema": "https://opencode.ai/config.json",
+                            "permission": {"edit": "allow", "bash": "allow",
+                                           "webfetch": "allow"},
+                        }, fh, ensure_ascii=False, indent=2)
+                except Exception:
+                    pass
 
             os.makedirs(self.data_dir, exist_ok=True)
             log = open(self.log_path, "ab")
