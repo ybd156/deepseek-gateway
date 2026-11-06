@@ -448,11 +448,12 @@ def main() -> int:
         check("good" in names and "_source" in (cfg["providers"][0] if cfg.get("providers") else {}),
               "快照带 _source 标记", str(names[:5]))
 
-        # 改一个上游的 base_url + 全局代理，整页存回去
+        # 改一个上游的 note/价格，并注入一个「UI 不认识」的字段，验证保存后不丢
         for p in cfg["providers"]:
             if p["name"] == "good":
                 p["note"] = "改过的备注"
                 p["price_in"] = 0.0123
+                p["extra"] = {"provider": {"only": ["TestPin"]}}
         body = {
             "strategy": "priority",
             "cooldown_seconds": 7,
@@ -471,6 +472,10 @@ def main() -> int:
         kt = next((p for p in d.get("providers", []) if p["name"] == "keytest"), {})
         check(kt.get("_key_source") == "面板", "密钥来源反映为面板",
               str(kt.get("_key_source")))
+        check(saved.get("extra", {}).get("provider", {}).get("only") == ["TestPin"],
+              "UI 不认识的字段（extra）未被丢弃", str(saved.get("extra")))
+        check(all(p.get("name") for p in d.get("providers", [])),
+              "每个上游都保住了 name", str([p.get("name") for p in d.get("providers", [])]))
 
         # 非法策略要被挡住
         code, _, _ = http("POST", base + "/admin/api/config",
