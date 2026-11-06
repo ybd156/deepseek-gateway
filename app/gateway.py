@@ -1282,15 +1282,25 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json(401, {"error": {"message": reason,
                                                "type": "unauthorized"}})
                 return
-            seen, data = set(), []
-            for p in PROVIDERS:
-                for mid in declared_models(p):
-                    key = mid.lower()
-                    if key in seen:
-                        continue
-                    seen.add(key)
-                    data.append({"id": mid, "object": "model", "owned_by": p["name"]})
-            self.send_json(200, {"object": "list", "data": data})
+            qs = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+            want_all = (qs.get("all") or ["0"])[0] in ("1", "true", "yes")
+            # 只有管理员能看「含不可用」的完整列表
+            payload = models_payload(include_all=want_all and is_admin(self))
+            self.send_json(200, payload)
+            return
+        if path.startswith("/v1/models/"):
+            ok, _tok, reason = auth_v1(self)
+            if not ok:
+                self.send_json(401, {"error": {"message": reason,
+                                               "type": "unauthorized"}})
+                return
+            mid = urllib.parse.unquote(path[len("/v1/models/"):]).strip()
+            for item in models_payload()["data"]:
+                if item["id"].lower() == mid.lower():
+                    self.send_json(200, item)
+                    return
+            self.send_json(404, {"error": {"message": f"没有模型 {mid}",
+                                           "type": "model_not_found"}})
             return
         if path == "/admin/api/config":
             if not is_admin(self):
@@ -1306,6 +1316,12 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path == "/admin/api/logs":
             self._logs()
+            return
+        if path == "/admin/api/models-check":
+            if not is_admin(self):
+                self.send_json(401, {"error": "unauthorized"})
+                return
+            self.send_json(200, models_check_payload())
             return
         if path == "/admin/api/errors":
             if not is_admin(self):
@@ -2379,6 +2395,38 @@ def discover_models(p: dict) -> dict:
         return {"ok": False, "error": err_text(exc)}
 
 
+def models_check_payload() -> dict:
+    """排查用：每个模型归属哪个上游、能不能用、为什么不能用。"""
+    used = used_tokens()
+    rows = []
+    for p in sorted(PROVIDERS, key=lambda x: x["priority"]):
+        reasons = []
+        if not p["enabled"]:
+            reasons.append("上游未启用")
+        if not (p["api_key"] or p["type"] == "opencode" or p["no_auth"]):
+            reasons.append("缺密钥")
+        if is_exhausted(p, used):
+            reasons.append("免费额度用尽")
+        cd = STATE.get(p["name"], {}).get("cooldown_until", 0)
+        if cd > now():
+            reasons.append(f"冷却 {int(cd - now())}s")
+        for mid in declared_models(p):
+            rows.append({
+                "model": mid,
+                "provider": p["name"],
+                "usable": not reasons,
+                "reason": "、".join(reasons),
+                "type": p["type"],
+                "mode": p.get("opencode_mode") or "",
+                "passthrough": bool(p.get("model_passthrough")),
+            })
+    return {"ok": True, "rows": rows,
+            "usable": sum(1 for r in rows if r["usable"]),
+            "total": len(rows),
+            "providers_enabled": sum(1 for p in PROVIDERS if p["enabled"]),
+            "providers_total": len(PROVIDERS)}
+
+
 def caps_payload() -> dict:
     """列出所有模型及其上下文 / 图片 / 思考档能力。"""
     seen, rows = set(), []
@@ -2500,6 +2548,64 @@ def errors_payload(limit: int = 3000) -> dict:
         return {"ok": False, "error": str(exc)}
     rows = sorted(out.values(), key=lambda x: (-x["count"], -x["last"]))
     return {"ok": True, "rows": rows, "kinds": len({r["kind"] for r in rows})}
+
+
+def usable_providers() -> list:
+    """真正能调用的上游：启用 + 有密钥（或免密钥）+ 没被额度卡死。"""
+    used = used_tokens()
+    out = []
+    for p in PROVIDERS:
+        if not p["enabled"]:
+            continue
+        if not (p["api_key"] or p["type"] == "opencode" or p["no_auth"]):
+            continue
+        if is_exhausted(p, used):
+            continue
+        out.append(p)
+    out.sort(key=lambda p: p["priority"])
+    return out
+
+
+def models_payload(include_all: bool = False) -> dict:
+    """给客户端看的模型清单。
+
+    只列真正能用的（启用了、有密钥、额度没爆）。默认不带不可用的，
+    否则客户端里会冒出一堆点了就 502 的名字。
+    include_all=True 时连不可用的也列，并标出原因（管理员排查用）。
+    """
+    override = RUNTIME["model_caps"] or {}
+    pool = PROVIDERS if include_all else usable_providers()
+    seen, rows = set(), []
+    for p in sorted(pool, key=lambda x: x["priority"]):
+        for mid in declared_models(p):
+            key = mid.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            caps = policy.caps_for(mid, override.get(mid))
+            item = {
+                "id": mid,
+                "object": "model",
+                "created": 0,
+                "owned_by": p["name"],
+                "context_length": int(caps.get("context") or 0),
+                "capabilities": {
+                    "vision": bool(caps.get("vision")),
+                    "reasoning": list(caps.get("reasoning") or []),
+                },
+            }
+            if include_all:
+                reasons = []
+                if not p["enabled"]:
+                    reasons.append("上游未启用")
+                if not (p["api_key"] or p["type"] == "opencode" or p["no_auth"]):
+                    reasons.append("缺密钥")
+                if is_exhausted(p, used_tokens()):
+                    reasons.append("额度用尽")
+                item["available"] = not reasons
+                item["unavailable_reason"] = "、".join(reasons)
+            rows.append(item)
+    return {"object": "list", "data": rows}
 
 
 def opencode_view() -> dict:
