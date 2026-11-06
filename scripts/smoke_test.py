@@ -451,7 +451,7 @@ def main() -> int:
         probe = json.loads(txt) if code == 200 else {}
         err = str(probe.get("error") or "")
         check(probe.get("ok") is False, "自检如实报告失败", err[:80])
-        check("没在运行" in err and "opencode serve" in err,
+        check("没在运行" in err and ("一键安装" in err or "启动" in err),
               "报错里给了可操作提示", err[:100])
         http("POST", base + "/admin/api/toggle", {"name": "opencode-dead", "enabled": False})
 
