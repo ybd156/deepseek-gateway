@@ -110,3 +110,17 @@ details[open] summary::before{content:"▾ "}
 textarea:focus{outline:none;border-color:var(--acc);
   box-shadow:0 0 0 3px rgba(37,99,235,.12)}
 .capin{width:96px;padding:4px 6px;font-size:12px}
+
+/* 模型页：列多，压紧一点，避免被挤到屏幕外 */
+table.caps{min-width:900px;table-layout:auto}
+table.caps th,table.caps td{padding:8px 10px}
+table.caps .c-model{max-width:260px}
+table.caps td.c-model{white-space:normal;word-break:break-all;line-height:1.4}
+table.caps .c-num{width:88px}
+table.caps .c-v{width:52px;text-align:center}
+.capin{width:74px;padding:3px 5px;font-size:12px}
+.capsel{width:96px;padding:3px 4px;font-size:12px}
+.scrollx{overflow-x:auto;padding-bottom:4px}
+.scrollx::-webkit-scrollbar{height:8px}
+.scrollx::-webkit-scrollbar-thumb{background:#cbd5e1;border-radius:4px}
+.taglist{font-size:11px;line-height:1.35;color:var(--dim);white-space:normal;max-width:120px}
