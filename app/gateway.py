@@ -396,9 +396,14 @@ def test_proxy(proxy_url: str, target: str = "https://api.deepseek.com/") -> dic
             return {"ok": True, "ms": int((time.time() - t0) * 1000),
                     "status": r.status, "target": target}
     except urllib.error.HTTPError as exc:
+        if exc.code in (401, 403):
+            note = "通道正常（目标需要鉴权，401/403 属预期）"
+        elif 400 <= exc.code < 500:
+            note = "通道正常（目标返回 4xx，说明已经连上）"
+        else:
+            note = f"通道能连上，但目标返回 {exc.code}"
         return {"ok": True, "ms": int((time.time() - t0) * 1000),
-                "status": exc.code, "target": target,
-                "note": "通道是通的（HTTP 错误码也说明连上了）"}
+                "status": exc.code, "target": target, "note": note}
     except Exception as exc:                        # noqa: BLE001
         return {"ok": False, "ms": int((time.time() - t0) * 1000),
                 "error": f"{type(exc).__name__}: {exc}", "target": target}
@@ -2034,7 +2039,8 @@ async function testProxy(){
     const d = await api('/admin/api/proxy-test', {method:'POST',
       body: JSON.stringify({proxy: proxy})});
     el.textContent = d.ok
-      ? ('通：HTTP ' + d.status + '  ' + d.ms + 'ms ' + (d.note || ''))
+      ? ('通：HTTP ' + d.status + ' · ' + d.ms + 'ms · ' + (d.note || '通道正常')
+         + '  ← 别忘了点「保存全部」')
       : ('失败：' + (d.error || '') + '（' + (d.ms || 0) + 'ms）');
   }catch(e){ el.textContent = '测试失败：' + e.message; }
 }
