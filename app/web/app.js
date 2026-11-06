@@ -1068,6 +1068,12 @@ async function loadCaps() {
         + (bad.length > 6 ? ' …' : '') + '（可在下表逐条指定）')
       : '';
 
+    let checkMap = {};
+    try {
+      const c = await api('/admin/api/models-check');
+      (c.rows || []).forEach(r => { checkMap[r.model] = r; });
+    } catch (e) { /* 忽略 */ }
+
     document.getElementById('capsBody').innerHTML = CAPS.map((m, i) => {
       const ctx = m.context ? (m.context >= 1000
         ? Math.round(m.context / 1000) + 'K' : m.context) : '-';
@@ -1076,10 +1082,16 @@ async function loadCaps() {
         const sel = (m.override && m.override.effort === t) ? ' selected' : '';
         return '<option value="' + t + '"' + sel + '>' + t + '</option>';
       }).join('');
+      const chk = checkMap[m.model] || {};
+      const usable = chk.usable !== false;
       return '<tr>'
         + '<td class="mono clip" title="' + esc(m.model) + '">' + esc(m.model)
         + (m.known ? '' : ' <span class="tag y">未知</span>') + '</td>'
         + '<td class="sub">' + esc(m.provider) + '</td>'
+        + '<td><span class="tag ' + (usable ? 'g' : 'r') + '">'
+        + (usable ? '可用' : '不可用') + '</span>'
+        + (usable ? '' : '<div class="sub">' + esc(chk.reason || '') + '</div>')
+        + '</td>'
         + '<td><input class="capin" type="number" value="' + (m.context || '')
         + '" data-m="' + esc(m.model) + '" data-k="context"></td>'
         + '<td><input type="checkbox"' + (m.vision ? ' checked' : '')
@@ -1088,7 +1100,7 @@ async function loadCaps() {
         + '<td><select class="capin" data-m="' + esc(m.model) + '" data-k="effort">'
         + '<option value="">跟随默认</option>' + opts + '</select></td>'
         + '</tr>';
-    }).join('') || '<tr><td colspan="6" class="sub">还没有模型</td></tr>';
+    }).join('') || '<tr><td colspan="7" class="sub">还没有模型</td></tr>';
   } catch (e) { msg('Models', '读取失败：' + e.message); }
 }
 
