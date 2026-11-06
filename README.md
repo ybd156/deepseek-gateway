@@ -378,7 +378,11 @@ OpenCode 的免费 DeepSeek **不能直接当 API 调**（外部请求返回 `40
 - **工作目录**：留空 = 应用数据目录下的 `opencode-workspace`（空目录，防止 Agent 误动你的文件）
 - **自动重启**：开关
 
-> 一键安装依赖网络（nodejs.org + npm 源）。装不上时日志会写清楚是下载失败还是 npm 失败，
+> 一键安装会把 npm 的 **HOME / 缓存 / 日志 / 全局前缀**全部重定向到应用数据目录
+> （`@appdata/deepseek-gateway/home`、`npm-cache`、`npm`），所以不会去写 `/home/<appuser>/.npm`
+> ——那是应用专用用户通常无权限的地方，也是"权限被拒"报错的根因。
+>
+> 一键安装依赖网络（npm 源）。装不上时日志会写清楚是下载失败还是 npm 失败，
 > 也可以 `NODE_VER=v20.18.0` 换个 Node 版本重试，或手动把 opencode 装好后在「二进制」里填路径。
 
 **然后启用上游**（`providers.json` 里已经有这条，默认 `enabled: false`）：
