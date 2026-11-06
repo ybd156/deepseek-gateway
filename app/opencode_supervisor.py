@@ -182,6 +182,7 @@ class OpenCodeSupervisor:
             "installed": bool(bin_path),
             "bin": bin_path,
             "bin_source": self.bin_source(),
+            "bin_version": self._version(bin_path) if bin_path else "",
             "private_bin": self.private_bin,
             "node": node,
             "node_version": self._version(node) if node else "",
