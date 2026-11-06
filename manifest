@@ -1,5 +1,5 @@
 appname=deepseek-gateway
-version=3.1.1
+version=3.1.2
 display_name=AI 网关
 desc=把多个模型服务商聚合成一个 OpenAI 兼容接口，跑在自己的飞牛 NAS 上。<br>支持 OpenAI Chat / Responses / Anthropic / Gemini 四种上游协议，失败自动切换下一家。<br>带用量统计（按天、按上游）、访问令牌、调用日志、出站品牌词脱敏、本地 opencode 托管。<br>免费额度可硬卡，用尽自动停用，绝不静默转付费。纯 Python 标准库，零第三方依赖，零 Docker。
 source=thirdparty
@@ -13,4 +13,4 @@ desktop_applaunchname=deepseek-gateway.main
 service_port=18787
 checkport=true
 ctl_stop=true
-changelog=3.1.1：仓库更名 fnos-ai-gateway，开发者与发布者指向 GitHub 主页与仓库。3.1.0：双向能力互通（探测上游能力 + /v1/gateway 自述）。3.0.3：上下文/最大输出/图片随模型下发。3.0.2：只列能用的模型。3.0.0：整体重写。
+changelog=3.1.2：模型页表格重新排版——列压紧、模型名完整换行显示、窄屏可横向滚动，不再被挤出屏幕；探测能力时把 opencode 这类「不提供元数据」的上游单独归到「跳过」，不再误报成问不到。3.1.1：仓库更名 fnos-ai-gateway，开发者/发布者指向 GitHub。3.1.0：双向能力互通。3.0.x：模型能力下发与筛选。3.0.0：整体重写。
