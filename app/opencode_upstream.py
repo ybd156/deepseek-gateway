@@ -108,8 +108,12 @@ class OpenCodeClient:
                 body["tools"] = self.tools
             body.update(self.extra)
 
+            print(f"[opencode] session={sid} model={self.model_id} "
+                  f"agent={self.agent} timeout={self.timeout}", flush=True)
+            t0 = time.time()
             try:
                 resp = self._req("POST", f"/session/{sid}/message", body)
+                print(f"[opencode] 完成 {time.time() - t0:.1f}s", flush=True)
             except OpenCodeError as exc:
                 if "timed out" in str(exc).lower() or "timeout" in str(exc).lower():
                     raise OpenCodeError(
@@ -174,6 +178,7 @@ class OpenCodeClient:
         step("health", lambda: self._req("GET", "/global/health"))
         step("providers", lambda: _summarize_providers(self._req("GET", "/config/providers")))
         step("agents", lambda: _agent_names(self._req("GET", "/agent")))
+        step("api", lambda: _doc_summary(self._req("GET", "/doc")))
         return out
 
     # ---- 响应转换 ----
@@ -260,3 +265,11 @@ def _agent_names(data) -> list:
         else:
             names.append(str(a))
     return names[:20]
+
+
+def _doc_summary(doc) -> dict:
+    """从 OpenAPI 里摘出跟 session 相关的路径，确认我们调的接口存在。"""
+    paths = list(((doc or {}).get("paths") or {}).keys())
+    sess = [p for p in paths if "session" in p][:14]
+    msg = [p for p in paths if p.rstrip("/").endswith("/message")]
+    return {"path_count": len(paths), "session_paths": sess, "message_paths": msg}
