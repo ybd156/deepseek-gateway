@@ -349,6 +349,7 @@ def config_save(body: dict) -> dict:
         patch["opencode_autostart"] = bool(body["opencode_autostart"])
 
     groups: dict[str, list] = {}
+    names_in_payload: list = []
     for raw in body.get("providers") or []:
         if not isinstance(raw, dict):
             continue
@@ -360,6 +361,7 @@ def config_save(body: dict) -> dict:
         item["name"] = name
         item.setdefault("base_url", "")
         item.setdefault("model", "")
+        names_in_payload.append(name)
         groups.setdefault(str(raw.get("_source") or "main"), []).append(item)
 
     base_dir = os.path.dirname(os.path.abspath(CONFIG_PATH))
@@ -372,6 +374,19 @@ def config_save(body: dict) -> dict:
             existing = {}
         existing["providers"] = items
         atomic_write_json(path, existing)
+
+    # 卡片上改了「启用」就以配置为准：清掉这些上游在 overrides 里的残留，
+    # 否则状态页点过「停用」的记录会一直压过配置里的勾选。
+    try:
+        ov = read_overrides()
+        if ov and names_in_payload:
+            hit = [n for n in names_in_payload if n in ov]
+            if hit:
+                for n in hit:
+                    ov.pop(n, None)
+                write_overrides(ov)
+    except Exception:
+        pass
 
     for env, val in (body.get("secrets") or {}).items():
         save_secret(str(env), str(val or ""))
@@ -505,6 +520,31 @@ def tokens_payload() -> dict:
     }
 
 
+def update_provider_enabled(name: str, enabled: bool) -> bool:
+    """把 enabled 直接写进该上游所在的配置文件（不再用覆盖文件）。"""
+    base_dir = os.path.dirname(os.path.abspath(CONFIG_PATH))
+    paths = [CONFIG_PATH]
+    d = os.path.join(base_dir, "providers.d")
+    if os.path.isdir(d):
+        paths += [os.path.join(d, f) for f in sorted(os.listdir(d)) if f.endswith(".json")]
+    for path in paths:
+        try:
+            with open(path, encoding="utf-8") as fh:
+                doc = json.load(fh) or {}
+        except Exception:
+            continue
+        hit = False
+        for p in doc.get("providers") or []:
+            if str(p.get("name")) == name:
+                p["enabled"] = bool(enabled)
+                hit = True
+                break
+        if hit:
+            atomic_write_json(path, doc)
+            return True
+    return False
+
+
 def save_one_provider(raw: dict) -> dict:
     """只写回一个上游（其它卡片不动）。"""
     name = str(raw.get("name") or "").strip()
@@ -534,6 +574,13 @@ def save_one_provider(raw: dict) -> dict:
 
     existing["providers"] = provs
     atomic_write_json(path, existing)
+    try:
+        ov = read_overrides()
+        if ov and name in ov:
+            ov.pop(name, None)
+            write_overrides(ov)
+    except Exception:
+        pass
     load_config()
     return config_snapshot()
 
@@ -666,6 +713,14 @@ def load_config() -> None:
                 "console_url": str(it.get("console_url", "") or ""),
                 "note": str(it.get("note", "")),
             })
+        # opencode 上游的兜底：老配置没有这两个字段时也要拿到合理默认
+        for p in items:
+            if p["type"] == "opencode":
+                if not p.get("opencode_agent"):
+                    p["opencode_agent"] = "plan"     # build 会自己循环到超时
+                if int(p.get("timeout") or 0) <= 180:
+                    p["timeout"] = 300
+
         PROVIDERS = items
         with STATE_LOCK:
             for p in PROVIDERS:
@@ -774,6 +829,29 @@ def usage_summary() -> dict:
 
 
 # ─────────────────────────── 路由 ───────────────────────────
+def skip_report() -> list:
+    """列出每个上游为什么没被用上，用于 502 的错误信息。"""
+    now = time.time()
+    used = used_tokens()
+    out = []
+    for p in PROVIDERS:
+        if not p["enabled"]:
+            out.append(f"{p['name']}：未启用")
+            continue
+        if not (p["api_key"] or p["type"] == "opencode" or p["no_auth"]):
+            out.append(f"{p['name']}：缺密钥")
+            continue
+        cd = STATE.get(p["name"], {}).get("cooldown_until", 0)
+        if cd > now:
+            out.append(f"{p['name']}：冷却中，还剩 {int(cd - now)} 秒")
+            continue
+        if is_exhausted(p, used):
+            out.append(f"{p['name']}：免费额度已用尽")
+            continue
+        out.append(f"{p['name']}：可用")
+    return out
+
+
 def candidates(strategy: str, want_model: str = "") -> list[dict]:
     now = time.time()
     used = used_tokens()
@@ -1651,11 +1729,17 @@ class Handler(BaseHTTPRequestHandler):
         if name not in {p["name"] for p in PROVIDERS}:
             self.send_json(404, {"ok": False, "error": "unknown provider"})
             return
-        ov = read_overrides()
-        ov[name] = enabled
-        write_overrides(ov)
+        ok_upd = update_provider_enabled(name, enabled)
+        # 顺手清掉老的覆盖记录，避免两份状态打架
+        try:
+            ov = read_overrides()
+            if name in ov:
+                ov.pop(name, None)
+                write_overrides(ov)
+        except Exception:
+            pass
         load_config()
-        self.send_json(200, {"ok": True, "name": name, "enabled": enabled})
+        self.send_json(200, {"ok": ok_upd, "name": name, "enabled": enabled})
 
     # ---- 主接口 ----
     def handle_chat(self) -> None:
@@ -1754,8 +1838,13 @@ class Handler(BaseHTTPRequestHandler):
                 record(p["name"], p["model"], 0, 0, 0.0, False,
                        int((time.time() - t0) * 1000), msg)
                 last = msg
+        reasons = skip_report()
+        if not tried:
+            head = "没有可用上游。" + "；".join(reasons[:8]) + ("…" if len(reasons) > 8 else "")
+        else:
+            head = f"所有上游均失败：{last}（已尝试：{', '.join(tried)}）"
         self.send_json(502, {"error": {
-            "message": f"所有上游均失败：{last}（已尝试：{', '.join(tried) or '无可用上游'}）",
+            "message": head,
             "type": "gateway_error"}})
 
     def handle_stream(self, payload: dict, strategy: str) -> None:
