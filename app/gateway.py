@@ -1441,6 +1441,7 @@ _SETTINGS_BODY = """
   <div class="prov" style="max-width:840px">
     <div class="hd"><span class="nm">opencode serve</span>
       <span><span id="ocState" class="tag d">…</span></span></div>
+    <div class="sub" id="ocEnv" style="margin-bottom:6px">检测中…</div>
     <div class="fld"><label>二进制</label><input id="ocBin" placeholder="留空 = 自动查找（应用私有安装 / PATH）"></div>
     <div class="fld"><label>端口</label><input id="ocPort" type="number" placeholder="4096"></div>
     <div class="fld"><label>工作目录</label><input id="ocWs" placeholder="留空 = 应用数据目录下 opencode-workspace"></div>
@@ -1606,6 +1607,11 @@ function ocPaint(d){
   document.getElementById('ocLog').textContent =
     (d.last_error ? ('[错误] ' + d.last_error + '
 ') : '') + (d.log || '(无日志)');
+  const env = document.getElementById('ocEnv');
+  env.textContent = 'Node ' + (d.node_version || (d.node ? '?' : '未找到'))
+    + (d.node ? ('（' + d.node + '）') : '')
+    + ' · npm ' + (d.npm_version || '—')
+    + ' · opencode ' + (d.bin ? (d.bin_source + '：' + d.bin) : '未安装');
 }
 
 async function ocRefresh(){
