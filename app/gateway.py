@@ -33,7 +33,7 @@ import time
 import urllib.error
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 from opencode_upstream import OpenCodeClient, OpenCodeError
 from opencode_supervisor import OpenCodeSupervisor
@@ -555,6 +555,22 @@ def provider_key_source(p: dict, sec: dict | None = None) -> str:
     return "无"
 
 
+def tail_log(path: str, lines: int = 200) -> str:
+    """读文件末尾 N 行（最多回看 256KB，避免大文件拖死）。"""
+    try:
+        with open(path, "rb") as fh:
+            fh.seek(0, os.SEEK_END)
+            size = fh.tell()
+            block = min(size, 256 * 1024)
+            fh.seek(size - block)
+            data = fh.read().decode("utf-8", "ignore")
+        return chr(10).join(data.splitlines()[-max(1, lines):])
+    except FileNotFoundError:
+        return "（还没有日志：服务还没写出过内容）"
+    except Exception as exc:                        # noqa: BLE001
+        return f"（读取失败：{exc}）"
+
+
 def _as_list(v) -> list:
     """把逗号/换行分隔的字符串或数组，统一成字符串列表。"""
     if not v:
@@ -1045,7 +1061,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json(200, {"ok": True, "providers": len(PROVIDERS)})
         elif path in ("/", "/admin", "/admin/"):
             self._send(200, STATUS_HTML.encode("utf-8"), "text/html; charset=utf-8")
-        elif path == "/settings" or path.startswith("/settings/"):
+        elif path == "/logs" or path == "/settings" or path.startswith("/settings/"):
             self._send(200, SETTINGS_HTML.encode("utf-8"), "text/html; charset=utf-8")
         elif path == "/admin/api/config":
             if not authorized(self):
@@ -1084,6 +1100,8 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json(401, {"error": "unauthorized"})
                 return
             self.send_json(200, self.status_payload())
+        elif path == "/admin/api/logs":
+            self.handle_logs()
         else:
             self.send_json(404, {"error": "not found"})
 
@@ -1186,6 +1204,51 @@ class Handler(BaseHTTPRequestHandler):
                 "ms": int((time.time() - t0) * 1000),
                 "error": err_text(exc)[:300],
             })
+
+    def handle_logs(self) -> None:
+        """调用日志（SQLite）与网关日志（app.log）。"""
+        if not authorized(self):
+            self.send_json(401, {"error": "unauthorized"})
+            return
+        qs = parse_qs(urlparse(self.path).query)
+        kind = (qs.get("kind") or ["usage"])[0]
+        try:
+            limit = max(1, min(int((qs.get("limit") or ["200"])[0]), 1000))
+        except Exception:
+            limit = 200
+
+        if kind == "gateway":
+            path = os.path.join(DATA_DIR, "app.log")
+            self.send_json(200, {"ok": True, "kind": "gateway", "path": path,
+                                 "text": tail_log(path, limit)})
+            return
+
+        names = {str(t.get("id", "")): str(t.get("name", "")) for t in load_tokens()}
+        rows = []
+        try:
+            conn = sqlite3.connect(DB_PATH, timeout=5)
+            cur = conn.execute(
+                "SELECT ts, provider, model, tokens_in, tokens_out, cost, ok, ms,"
+                " err, token_id FROM usage ORDER BY ts DESC LIMIT ?", (limit,))
+            for r in cur.fetchall():
+                rows.append({
+                    "ts": float(r[0] or 0),
+                    "time": time.strftime("%m-%d %H:%M:%S", time.localtime(r[0] or 0)),
+                    "provider": r[1] or "",
+                    "model": r[2] or "",
+                    "tokens_in": int(r[3] or 0),
+                    "tokens_out": int(r[4] or 0),
+                    "cost": float(r[5] or 0),
+                    "ok": bool(r[6]),
+                    "ms": int(r[7] or 0),
+                    "err": r[8] or "",
+                    "token": names.get(str(r[9] or ""), "（主口令）" if not r[9] else "已删除"),
+                })
+            conn.close()
+        except Exception as exc:                    # noqa: BLE001
+            self.send_json(200, {"ok": False, "error": str(exc)})
+            return
+        self.send_json(200, {"ok": True, "kind": "usage", "rows": rows})
 
     def handle_save_provider(self) -> None:
         """保存单张上游卡片。"""
@@ -1887,7 +1950,15 @@ _CSS = """
 """
 
 _COMMON_JS = """
-const BASE = (location.pathname.replace(/\/(admin|settings)(\/[^\/]*)?\/?$/, '') || '').replace(/\/$/, '');
+const BASE = (function(){
+  const seg = location.pathname.split('/').filter(Boolean);
+  let cut = seg.length;
+  for(let i = seg.length - 1; i >= 0; i--){
+    const s = seg[i];
+    if(s === 'admin' || s === 'settings' || s === 'logs'){ cut = i; }
+  }
+  return cut > 0 ? ('/' + seg.slice(0, cut).join('/')) : '';
+})();
 const tok = () => localStorage.getItem('gw_token') || '';
 const H = () => ({'Authorization':'Bearer '+tok(),'Content-Type':'application/json'});
 function msg(t){ const e=document.getElementById('msg'); if(e) e.textContent = t; }
@@ -1902,7 +1973,8 @@ function esc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/"/g,
 function parseProxy(s){
   s = String(s||'').trim();
   if(!s) return {scheme:'', addr:''};
-  const m = s.match(/^([a-z0-9]+):\\/\\/(.*)$/i);
+  const i = s.indexOf('://');
+  if(i > 0) return {scheme: s.slice(0, i).toLowerCase(), addr: s.slice(i + 3)};
   if(m) return {scheme: m[1].toLowerCase(), addr: m[2]};
   return {scheme:'http', addr:s};
 }
@@ -1934,11 +2006,13 @@ function copyEp(id, label){
 document.querySelectorAll('[data-nav]').forEach(a => { a.href = BASE + a.dataset.nav; });
 
 function currentSect(){
-  const pth = location.pathname.replace(/\/$/, '');
+  let pth = location.pathname;
+  while(pth.length > 1 && pth.endsWith('/')){ pth = pth.slice(0, -1); }
   if(pth.endsWith('/settings/providers')) return 'providers';
   if(pth.endsWith('/settings/tokens')) return 'tokens';
   if(pth.endsWith('/settings/opencode')) return 'opencode';
   if(pth.endsWith('/settings')) return 'global';
+  if(pth.endsWith('/logs')) return 'logs';
   return 'admin';
 }
 
@@ -1950,11 +2024,16 @@ function applySect(){
   document.querySelectorAll('.sect').forEach(function(el){
     el.classList.toggle('on', el.dataset.sect === cur);
   });
-  const titles = {global:'全局设置', providers:'上游', tokens:'访问令牌', opencode:'OpenCode 运行时'};
+  const sr = document.getElementById('saveRow');
+  if(sr) sr.style.display = (cur === 'logs') ? 'none' : 'flex';
+  if(cur === 'logs'){ loadUsage(); loadGwLog(); }
+  const titles = {global:'全局设置', providers:'上游', tokens:'访问令牌',
+                  opencode:'OpenCode 运行时', logs:'日志'};
   const subs = {global:'口令、路由策略、冷却与代理',
                 providers:'每个上游一张卡片，可挂多个模型',
                 tokens:'给别人用的独立 Key，可单独停用/限额',
-                opencode:'本地 opencode serve 的安装与启停'};
+                opencode:'本地 opencode serve 的安装与启停',
+                logs:'每次调用的记录，以及服务本身的输出'};
   const t = document.getElementById('secTitle');
   const sb = document.getElementById('secSub');
   if(t && titles[cur]) t.textContent = titles[cur];
@@ -1968,6 +2047,7 @@ _SIDE = """
     <div class="brand">DeepSeek 网关<small>多上游聚合 · OpenAI 兼容</small></div>
     <nav class="nav">
       <a data-nav="/admin" data-sect="admin">概览</a>
+      <a data-nav="/logs" data-sect="logs">日志</a>
       <div class="sep">设置</div>
       <a data-nav="/settings" data-sect="global">全局</a>
       <a data-nav="/settings/providers" data-sect="providers">上游</a>
@@ -2155,7 +2235,7 @@ NAV
     <h1 id="secTitle">设置</h1>
     <div class="sub" id="secSub">改完点「保存全部」立即生效，不用重启。</div>
 
-    <div class="row">
+    <div class="row" id="saveRow">
       <button class="pri" onclick="save()">保存全部</button>
       <button onclick="loadCfg()">重新载入</button>
       <span class="msg" id="msg"></span>
@@ -2259,6 +2339,38 @@ NAV
         </div>
         <pre id="ocLog">（暂无日志）</pre>
       </div>
+    </div>
+
+    <!-- ===== 日志 ===== -->
+    <div class="sect" data-sect="logs">
+      <h2>调用日志</h2>
+      <div class="row" style="margin-top:0">
+        <button onclick="loadUsage()">刷新</button>
+        <label class="chk"><input type="checkbox" id="autoLog" onchange="toggleAutoLog()">
+          自动刷新（5 秒）</label>
+        <select id="logLimit" onchange="loadUsage()" style="max-width:150px">
+          <option value="100">最近 100 条</option>
+          <option value="300" selected>最近 300 条</option>
+          <option value="1000">最近 1000 条</option>
+        </select>
+        <span class="msg" id="logMsg"></span>
+      </div>
+      <div style="overflow-x:auto">
+        <table style="min-width:1000px">
+          <thead><tr>
+            <th>时间</th><th>上游</th><th>模型</th><th>令牌</th><th>结果</th>
+            <th>输入/输出</th><th>花费</th><th>耗时</th><th>错误</th>
+          </tr></thead>
+          <tbody id="logBody"></tbody>
+        </table>
+      </div>
+
+      <h2>网关日志</h2>
+      <div class="row" style="margin-top:0">
+        <button onclick="loadGwLog()">刷新</button>
+        <span class="sub" id="gwLogPath"></span>
+      </div>
+      <pre id="gwLog">（暂无）</pre>
     </div>
   </main>
 </div>
@@ -2661,6 +2773,52 @@ async function ocAction(action){
       document.getElementById('ocLog').textContent = JSON.stringify(d.diag, null, 2);
     }
   }catch(e){ msg('操作失败：' + e.message); }
+}
+
+/* ---------- 日志 ---------- */
+async function loadUsage(){
+  const sel = document.getElementById('logLimit');
+  const n = sel ? sel.value : 300;
+  try{
+    const d = await api('/admin/api/logs?kind=usage&limit=' + n);
+    if(!d.ok){ msg('读取失败：' + (d.error || '')); return; }
+    const rows = (d.rows || []).map(function(r){
+      return '<tr>'
+        + '<td class="nowrap mono">' + r.time + '</td>'
+        + '<td>' + esc(r.provider) + '</td>'
+        + '<td class="mono clip" title="' + esc(r.model) + '">' + esc(r.model) + '</td>'
+        + '<td>' + esc(r.token) + '</td>'
+        + '<td><span class="tag ' + (r.ok ? 'g' : 'r') + '">'
+        + (r.ok ? '成功' : '失败') + '</span></td>'
+        + '<td class="nowrap">' + r.tokens_in + ' / ' + r.tokens_out + '</td>'
+        + '<td class="mono nowrap">$' + r.cost.toFixed(4) + '</td>'
+        + '<td class="nowrap">' + r.ms + 'ms</td>'
+        + '<td><span class="err" title="' + esc(r.err) + '">'
+        + (esc(r.err) || '-') + '</span></td>'
+        + '</tr>';
+    }).join('');
+    document.getElementById('logBody').innerHTML =
+      rows || '<tr><td colspan="9" class="sub">还没有调用记录</td></tr>';
+    const lm = document.getElementById('logMsg');
+    if(lm) lm.textContent = '共 ' + (d.rows || []).length + ' 条';
+  }catch(e){ msg('读取失败：' + e.message); }
+}
+
+async function loadGwLog(){
+  try{
+    const d = await api('/admin/api/logs?kind=gateway&limit=300');
+    document.getElementById('gwLogPath').textContent = d.path || '';
+    document.getElementById('gwLog').textContent = d.text || '（暂无）';
+  }catch(e){ msg('读取失败：' + e.message); }
+}
+
+let autoLogTimer = null;
+function toggleAutoLog(){
+  const on = document.getElementById('autoLog').checked;
+  if(autoLogTimer){ clearInterval(autoLogTimer); autoLogTimer = null; }
+  if(on){
+    autoLogTimer = setInterval(function(){ loadUsage(); loadGwLog(); }, 5000);
+  }
 }
 
 /* ---------- 访问令牌 ---------- */
