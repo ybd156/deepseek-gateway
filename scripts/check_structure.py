@@ -50,7 +50,8 @@ def main() -> int:
     for p in ["manifest", "ICON.PNG", "ICON_256.PNG", "app", "cmd",
               "wizard", "config/privilege", "config/resource",
               "app/gateway.py", "app/service.sh", "app/providers.json",
-              "app/opencode_upstream.py", "app/opencode-serve.sh"]:
+              "app/opencode_upstream.py", "app/opencode-serve.sh",
+              "app/opencode_supervisor.py", "app/install-opencode.sh"]:
         check(os.path.exists(p), p)
 
     print("== 2. manifest 字段 ==")
