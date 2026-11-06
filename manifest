@@ -1,5 +1,5 @@
 appname=deepseek-gateway
-version=2.6.9
+version=2.7.0
 display_name=DeepSeek 网关
 desc=把火山方舟、硅基流动、OpenRouter、腾讯 TokenHub、百度千帆、DeepSeek 官方等多个上游聚合成一个 OpenAI 兼容端点。<br>默认只启用免费上游，付费一律关闭；免费额度用尽自动停用，绝不静默转付费。<br>纯 Python 标准库实现，不依赖 Docker 与任何第三方包。
 source=thirdparty
@@ -13,4 +13,4 @@ desktop_applaunchname=deepseek-gateway.main
 service_port=18787
 checkport=true
 ctl_stop=true
-changelog=2.6.9：重做 OpenCode 界面——顶部三个状态标签（安装/登录/运行）一眼看清，下面按「1 安装 → 2 登录 → 3 验证」三步走，每个按钮只在对应步骤出现；路径/端口/工作目录/API Key 收进「高级设置」，三份日志收进「日志」，默认折叠不再占屏。2.6.8：登录按钮自愈。2.6.7：向导按钮分发。2.6.6：区分 Go/Console。2.6.0：无头登录。1.1.0：免费优先。1.0.0：首个版本。
+changelog=2.7.0：修复 opencode 命令行模式「装了却永远失败」的根因——`opencode run` 默认去连共享服务，连不上就报 ECONNREFUSED，现改为 `--standalone` 用私有服务，免费模型在飞牛本机即可正常对话（实测 DeepSeek V4.1 Flash / GLM-5.3 Flash 均 200）。登录的 PTY 补窗口尺寸、并剥离代理避免 Transport error。2.6.x：登录向导与界面重做。2.5.x：opencode CLI 模式。2.4.x：上游协议。2.3.x：日志页。1.1.0：免费优先。1.0.0：首个版本。
