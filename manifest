@@ -1,5 +1,5 @@
 appname=deepseek-gateway
-version=1.9.4
+version=1.9.5
 display_name=DeepSeek 网关
 desc=把火山方舟、硅基流动、OpenRouter、腾讯 TokenHub、百度千帆、DeepSeek 官方等多个上游聚合成一个 OpenAI 兼容端点。<br>默认只启用免费上游，付费一律关闭；免费额度用尽自动停用，绝不静默转付费。<br>纯 Python 标准库实现，不依赖 Docker 与任何第三方包。
 source=thirdparty
@@ -13,4 +13,4 @@ desktop_applaunchname=deepseek-gateway.main
 service_port=18787
 checkport=true
 ctl_stop=true
-changelog=1.9.4：修复「保存失败：每个上游都必须有 name」——设置页收集上游时用了宽泛的 .prov 选择器，把 OpenCode 运行时卡片和访问令牌卡片也当成上游收集了；现在上游卡片改用专属类 .provcard，并在保存前做名称非空/不重复的前端自检。CI 增加对应静态断言防回归。1.9.3：npm HOME 重定向修复安装权限。1.9.x：多令牌/代理测试/Key 显示。1.8.0：OpenAI 兼容预设与 SOCKS5。1.7.x：OpenCode 运行时。1.1.0：免费优先。1.0.0：首个版本。
+changelog=1.9.5：控制台地址支持自动识别（按接口域名匹配常见平台）并加「打开」按钮，卡片右上也有「去获取 Key ↗」直达链接；自检改为按该卡片自己的地址秒级探测，opencode 没启动时立即报错而不是卡住，前端加 60 秒超时与耗时显示。1.9.4：修复保存时误收集非上游卡片。1.9.3：npm HOME 重定向。1.9.x：多令牌/代理测试。1.8.0：OpenAI 兼容预设与 SOCKS5。1.1.0：免费优先。1.0.0：首个版本。
