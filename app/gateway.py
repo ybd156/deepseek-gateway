@@ -734,7 +734,7 @@ def load_config() -> None:
         for p in items:
             if p["type"] == "opencode":
                 if not p.get("opencode_agent"):
-                    p["opencode_agent"] = "plan"     # build 会自己循环到超时
+                    pass  # 不再强制 plan（会让 run 失败）     # build 会自己循环到超时
                 if not p.get("timeout"):        # 只在没显式配过时兜底
                     p["timeout"] = 150
 
@@ -1216,7 +1216,7 @@ def call_opencode_cli(p: dict, payload: dict) -> tuple[dict, str]:
     args = [bin_path, "run", "--standalone"]
     if model_arg:
         args += ["--model", model_arg]
-    agent = p.get("opencode_agent") or "plan"
+    agent = p.get("opencode_agent") or ""
     if agent:
         args += ["--agent", agent]
     args.append(prompt)
@@ -3032,8 +3032,8 @@ function provCard(p, i){
        + '<div class="field"><label>providerID</label>'
        + '<input data-f="opencode_provider" value="' + esc(p.opencode_provider || 'opencode') + '"></div>'
        + '<div class="field"><label>agent</label>'
-       + '<input data-f="opencode_agent" value="' + esc(p.opencode_agent || 'plan') + '">'
-       + '<div class="hint">建议 plan（只读，不会自己循环）</div></div>'
+       + '<input data-f="opencode_agent" value="' + esc(p.opencode_agent || '') + '">'
+       + '<div class="hint">留空 = opencode 默认 build；免费模型建议留空</div></div>'
        + '</div>';
   } else {
     h += '<div class="f2">'
