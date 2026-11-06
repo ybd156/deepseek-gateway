@@ -14,6 +14,8 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
+import subprocess
 import sys
 
 if hasattr(sys.stdout, "reconfigure"):
@@ -51,7 +53,8 @@ def main() -> int:
               "wizard", "config/privilege", "config/resource",
               "app/gateway.py", "app/service.sh", "app/providers.json",
               "app/opencode_upstream.py", "app/opencode-serve.sh",
-              "app/opencode_supervisor.py", "app/install-opencode.sh"]:
+              "app/opencode_supervisor.py", "app/install-opencode.sh",
+              "app/proxy_support.py"]:
         check(os.path.exists(p), p)
 
     print("== 2. manifest 字段 ==")
@@ -163,6 +166,46 @@ def main() -> int:
         check(True, "app/gateway.py 语法正确")
     except Exception as exc:                           # noqa: BLE001
         check(False, "app/gateway.py 语法", str(exc))
+
+    print("== 7b. 页面内联 JS 语法（node --check）==")
+    node = shutil.which("node")
+    if not node:
+        print("  SKIP 本机没有 node，跳过（CI 上有）")
+    else:
+        try:
+            sys.path.insert(0, os.path.join(os.getcwd(), "app"))
+            import importlib.util
+            spec = importlib.util.spec_from_file_location("gw_js_check", "app/gateway.py")
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            for name in ("STATUS_HTML", "SETTINGS_HTML"):
+                html = getattr(mod, name, "")
+                parts = html.split("<script>")
+                js = parts[1].split("</script>")[0] if len(parts) > 1 else ""
+                tmp_js = os.path.join(os.getcwd(), f".jscheck_{name}.js")
+                with open(tmp_js, "w", encoding="utf-8") as fh:
+                    fh.write(js)
+                out_path = os.path.join(os.getcwd(), f".jscheck_{name}.out")
+                with open(out_path, "w", encoding="utf-8") as ofh:
+                    rc_code = subprocess.call([node, "--check", tmp_js],
+                                              stdout=ofh, stderr=subprocess.STDOUT)
+                detail = ""
+                if rc_code != 0:
+                    try:
+                        txt = open(out_path, encoding="utf-8", errors="replace").read()
+                        lines = [ln for ln in txt.strip().splitlines() if ln.strip()]
+                        detail = lines[-1] if lines else "语法错误"
+                    except Exception:
+                        detail = "语法错误"
+                for f2 in (tmp_js, out_path):
+                    try:
+                        os.unlink(f2)
+                    except Exception:
+                        pass
+                rc = type("R", (), {"returncode": rc_code})()
+                check(rc.returncode == 0, f"{name} 内联 JS 语法正确", detail)
+        except Exception as exc:                       # noqa: BLE001
+            check(False, "页面 JS 语法检查", str(exc))
 
     print("== 8. 图标尺寸 ==")
     try:
