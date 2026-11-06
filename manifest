@@ -1,5 +1,5 @@
 appname=deepseek-gateway
-version=1.9.8
+version=1.9.9
 display_name=DeepSeek 网关
 desc=把火山方舟、硅基流动、OpenRouter、腾讯 TokenHub、百度千帆、DeepSeek 官方等多个上游聚合成一个 OpenAI 兼容端点。<br>默认只启用免费上游，付费一律关闭；免费额度用尽自动停用，绝不静默转付费。<br>纯 Python 标准库实现，不依赖 Docker 与任何第三方包。
 source=thirdparty
@@ -13,4 +13,4 @@ desktop_applaunchname=deepseek-gateway.main
 service_port=18787
 checkport=true
 ctl_stop=true
-changelog=1.9.8：状态页「接入信息」拆成「直连（推荐）」和「网关路径」两行并加警示——外部客户端（Cherry Studio/OpenCode/脚本）必须用直连端口，网关路径需要 NAS 登录态；接口加 CORS 头与 OPTIONS 预检，浏览器类客户端（Open WebUI/LobeChat）可直接连。1.9.7：opencode 默认只读 agent + 模型预检。1.9.6：诊断与放行权限。1.9.0：多令牌。1.1.0：免费优先。1.0.0：首个版本。
+changelog=1.9.9：状态页「接入信息」每行加「复制」按钮（直连/本机/网关/模型名/curl 示例），并新增「本机」地址（127.0.0.1）——给跑在 NAS 上的脚本用；复制在 http 环境下自动降级到 execCommand，局域网也能用。1.9.8：直连/网关分离 + CORS。1.9.7：opencode 只读 agent。1.9.0：多令牌。1.1.0：免费优先。1.0.0：首个版本。
