@@ -213,6 +213,18 @@ SOCKS5 由标准库自实现隧道，不依赖 PySocks。填完点旁边的「**
 **免密钥上游**：勾选卡片里的「免密钥」后，即使没有 Key 也会参与路由——本地 Ollama、vLLM、
 LM Studio 这类不需要鉴权的服务用这个。面板上密钥来源会显示为「免密钥」。
 
+### 不只 DeepSeek：一个上游挂多个模型
+
+每个上游除了「默认模型」，还有「**更多模型**」一行（逗号分隔）。网关按客户端请求里的 `model` 路由：
+
+- 客户端点名了某个上游的模型 → 优先用那个上游，并把该模型名发过去
+- 没点名 / 没人认领 → 用各上游的默认模型，按优先级或价格排序
+
+**「探测这个上游有哪些模型」**按钮会真的去问一遍上游（`GET /models`，OpenRouter 这类还会读
+`pricing` 判断是否免费），然后告诉你「共 N 个，免费 M 个」，点一下就能把免费模型批量填进去。
+
+所以 OpenRouter 一个 Key 可以挂上它全部免费模型，硅基、NVIDIA 同理——不限于 DeepSeek。
+
 ### 给别人用：访问令牌（多把 Key）
 
 设置页有「**访问令牌**」区块。别把主口令发给别人，给每人建一把独立令牌：
@@ -333,6 +345,7 @@ OpenCode 支持自定义 OpenAI 兼容 provider，把网关当成一个 provider
 | `model_contains` | 校验响应里的 `model` 字段，防上游静默换模型 |
 | `strict_model` | `true` = 校验不过就换下一家；`false` = 只加个警告头 |
 | `extra` | 原样并入请求体（OpenRouter 用来钉死某个 provider） |
+| `models` | 该上游额外支持的模型列表。客户端请求里点哪个名就用哪个 |
 | `price_in/price_out` | USD / 百万 tokens，用于成本估算和 `cheapest` 排序 |
 | `free_only` | `true` = 计入免费额度硬卡；额度用尽自动停用，**绝不转付费** |
 | `free_quota_tokens` | 免费额度总量（tokens）；`free_only=true` 且 >0 时生效 |
