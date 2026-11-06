@@ -24,7 +24,7 @@
       "note": "OpenCode 免费档：先在本机跑 opencode serve（设置页可一键安装/启动）；默认用只读 agent「plan」，避免 agent 循环把请求拖到超时",
       "console_url": "https://opencode.ai/docs/zen",
       "opencode_agent": "plan",
-      "timeout": 300
+      "timeout": 150
     },
     {
       "name": "nvidia-nim",
