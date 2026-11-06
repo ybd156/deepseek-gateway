@@ -879,6 +879,10 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(code)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))
+        # 浏览器类客户端（Open WebUI / LobeChat 等）需要 CORS
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Headers", "Authorization, Content-Type, X-Api-Key")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
         for k, v in (extra or {}).items():
             self.send_header(k, v)
         self.end_headers()
@@ -963,6 +967,14 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json(200, self.status_payload())
         else:
             self.send_json(404, {"error": "not found"})
+
+    def do_OPTIONS(self) -> None:
+        self.send_response(204)
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Headers", "Authorization, Content-Type, X-Api-Key")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Content-Length", "0")
+        self.end_headers()
 
     def do_POST(self) -> None:
         self._safe(self._do_post)
@@ -1252,6 +1264,7 @@ class Handler(BaseHTTPRequestHandler):
 
         self.send_json(200, {
             "ok": True,
+            "port": PORT,
             "strategy": RUNTIME["strategy"],
             "cooldown_seconds": RUNTIME["cooldown"],
             "auth_enabled": bool(RUNTIME["gateway_token"]),
@@ -1649,8 +1662,13 @@ _STATUS_BODY = """
   </div>
 
   <h2>接入信息（给客户端用，可直接复制）</h2>
-  <div class="prov" style="max-width:900px">
-    <div class="fld"><label>Base URL</label><input id="epUrl" readonly></div>
+  <div class="prov" style="max-width:980px">
+    <div class="fld"><label>直连（推荐）</label><input id="epDirect" readonly></div>
+    <div class="fld"><label>网关路径</label><input id="epGateway" readonly></div>
+    <div class="sub" style="margin:2px 0 8px">
+      ⚠ 外部客户端（Cherry Studio / OpenCode / 脚本）**必须用「直连」那行**；
+      「网关路径」需要飞牛登录态，只有在本机浏览器里打开时才能用。
+    </div>
     <div class="fld"><label>模型名</label><input id="epModels" readonly placeholder="加载中…"></div>
     <div class="fld"><label>示例</label><input id="epCurl" readonly></div>
   </div>
@@ -1682,6 +1700,10 @@ async function load(){
       d.providers.filter(p=>p.enabled&&p.has_key&&p.cooldown===0&&!p.exhausted).length
       + ' / ' + d.providers.length;
     document.getElementById('strat').textContent = d.strategy;
+    if(!epInited){
+      epInited = true;
+      loadEndpoint(d.port);
+    }
     document.getElementById('tbody').innerHTML = d.providers.map(p=>{
       let st, cls;
       if(!p.enabled){ st='已停用'; cls='d'; }
@@ -1745,23 +1767,31 @@ async function reloadCfg(){
   catch(e){}
   load();
 }
-async function loadEndpoint(){
+async function loadEndpoint(port){
   try{
-    const base = location.origin + BASE + '/v1';
-    document.getElementById('epUrl').value = base;
+    const host = location.hostname;
+    const direct = 'http://' + host + ':' + (port || 18787) + '/v1';
+    document.getElementById('epDirect').value = direct;
+    document.getElementById('epGateway').value = BASE
+      ? (location.origin + BASE + '/v1')
+      : '（当前就是直连访问，无需网关）';
+
     const r = await fetch(BASE + '/v1/models', {headers:H()});
     const d = await r.json();
     const ids = (d.data || []).map(m => m.id);
-    document.getElementById('epModels').value = ids.length ? ids.join('  ,  ') : '（还没配置上游）';
+    document.getElementById('epModels').value =
+      ids.length ? ids.join('  ,  ') : '（还没配置上游）';
     const first = ids[0] || 'deepseek-v4.1-flash';
     document.getElementById('epCurl').value =
-      'curl ' + base + '/chat/completions -H "Content-Type: application/json" '
+      'curl ' + direct + '/chat/completions -H "Content-Type: application/json" '
+      + '-H "Authorization: Bearer <你的Key>" '
       + '-d ' + String.fromCharCode(39) + '{"model":"' + first
       + '","messages":[{"role":"user","content":"hi"}]}' + String.fromCharCode(39);
   }catch(e){}
 }
 
-load(); loadEndpoint(); setInterval(load, 5000);
+let epInited = false;
+load(); setInterval(load, 5000);
 """
 
 _SETTINGS_BODY = """
