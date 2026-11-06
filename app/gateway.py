@@ -1827,7 +1827,8 @@ class Handler(BaseHTTPRequestHandler):
             return
         try:
             length = int(self.headers.get("Content-Length") or 0)
-            action = str(json.loads(self.rfile.read(length) or b"{}").get("action", ""))
+            _body = json.loads(self.rfile.read(length) or b"{}")
+            action = str(_body.get("action", ""))
         except Exception:
             self.send_json(400, {"ok": False, "error": "bad request"})
             return
@@ -1835,6 +1836,13 @@ class Handler(BaseHTTPRequestHandler):
         if action == "login":
             ok_l, msg_l = SUPERVISOR.start_login("")
             self.send_json(200, {**SUPERVISOR.status(), "ok": ok_l, "message": msg_l})
+            return
+        if action == "login-keys":
+            keys = str(_body.get("keys") or "")
+            if keys == "enter":
+                keys = chr(13)
+            ok_k, msg_k = SUPERVISOR.send_login(keys)
+            self.send_json(200, {**SUPERVISOR.status(), "ok": ok_k, "message": msg_k})
             return
         if action == "login-log":
             self.send_json(200, {**SUPERVISOR.status(), "ok": True,
@@ -2830,6 +2838,11 @@ NAV
         <div class="sub" style="margin:10px 0 4px">启动输出</div>
         <pre id="ocLog">（暂无日志）</pre>
         <div class="sub" style="margin:10px 0 4px">登录输出（auth login 的链接/验证码在这）</div>
+        <div class="inline" style="margin:0 0 6px">
+          <input id="ocKeys" placeholder="看到菜单时：直接点「发送回车」选第一项；也可填数字">
+          <button onclick="ocSendKeys()">发送</button>
+          <button class="pri" onclick="ocSendKeys('enter')">发送回车</button>
+        </div>
         <pre id="ocLogin">（还没有登录输出）</pre>
         <div class="sub" style="margin:10px 0 4px">opencode 自己的日志（provider 报错在这）</div>
         <pre id="ocOwnLog">（暂无）</pre>
@@ -3313,6 +3326,17 @@ function ocPaint(d){
     + (d.node ? ('（' + d.node + '）') : '')
     + ' · npm ' + (d.npm_version || '—')
     + ' · opencode ' + (d.bin ? ((d.bin_version || '?') + '　' + d.bin) : '未安装');
+}
+
+async function ocSendKeys(fixed){
+  const el = document.getElementById('ocKeys');
+  const keys = (fixed !== undefined) ? fixed : (el ? el.value : '');
+  try{
+    const d = await api('/admin/api/opencode', {method:'POST',
+      body: JSON.stringify({action: 'login-keys', keys: keys})});
+    msg((d.ok ? '[成功] ' : '[失败] ') + (d.message || ''));
+    ocPaint(d);
+  }catch(e){ msg('发送失败：' + e.message); }
 }
 
 async function ocRefresh(){
