@@ -93,7 +93,15 @@ class OpenCodeClient:
                 body["tools"] = self.tools
             body.update(self.extra)
 
-            resp = self._req("POST", f"/session/{sid}/message", body)
+            try:
+                resp = self._req("POST", f"/session/{sid}/message", body)
+            except OpenCodeError as exc:
+                if "timed out" in str(exc).lower() or "timeout" in str(exc).lower():
+                    raise OpenCodeError(
+                        f"OpenCode 处理超时（{self.timeout}s）：它多半卡在等工具调用权限确认，"
+                        f"或模型响应很慢。看「OpenCode 运行时」的日志，或点「诊断」；"
+                        f"也可以在 providers.json 里把该上游的 timeout 调大。") from None
+                raise
             return self._to_openai(resp, prompt)
         finally:
             if sid:
@@ -101,6 +109,22 @@ class OpenCodeClient:
                     self._req("DELETE", f"/session/{sid}")
                 except Exception:
                     pass
+
+    # ---- 诊断：把 server 的真实情况拉回来 ----
+    def diagnose(self) -> dict:
+        out: dict = {"base": self.base, "steps": []}
+
+        def step(name, fn):
+            try:
+                out["steps"].append({"step": name, "ok": True, "data": fn()})
+            except Exception as exc:                # noqa: BLE001
+                out["steps"].append({"step": name, "ok": False,
+                                     "error": f"{type(exc).__name__}: {exc}"[:300]})
+
+        step("health", lambda: self._req("GET", "/global/health"))
+        step("providers", lambda: _summarize_providers(self._req("GET", "/config/providers")))
+        step("agents", lambda: _agent_names(self._req("GET", "/agent")))
+        return out
 
     # ---- 响应转换 ----
     @staticmethod
@@ -154,3 +178,35 @@ class OpenCodeClient:
             # 给网关自己做 model 校验用
             "_upstream_model": str(info.get("modelID") or info.get("model") or model),
         }
+
+
+def _summarize_providers(data: dict) -> list:
+    """把 /config/providers 压成小摘要，重点看有没有 deepseek 的模型。"""
+    provs = []
+    if isinstance(data, dict):
+        provs = data.get("providers") or data.get("all") or []
+    out = []
+    for p in provs:
+        if not isinstance(p, dict):
+            continue
+        pid = p.get("id") or p.get("providerID") or "?"
+        models = p.get("models") or {}
+        ids = list(models.keys()) if isinstance(models, dict) else list(models or [])
+        out.append({
+            "id": pid,
+            "model_count": len(ids),
+            "deepseek": [x for x in ids if "deepseek" in str(x).lower()][:8],
+            "sample": ids[:6],
+        })
+    return out
+
+
+def _agent_names(data) -> list:
+    names = []
+    items = data if isinstance(data, list) else (data or {}).get("agents") or []
+    for a in items:
+        if isinstance(a, dict):
+            names.append(a.get("name") or a.get("id") or "?")
+        else:
+            names.append(str(a))
+    return names[:20]
