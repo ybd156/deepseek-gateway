@@ -1,5 +1,5 @@
 appname=deepseek-gateway
-version=1.5.1
+version=1.6.0
 display_name=DeepSeek 网关
 desc=把火山方舟、硅基流动、OpenRouter、腾讯 TokenHub、百度千帆、DeepSeek 官方等多个上游聚合成一个 OpenAI 兼容端点。<br>默认只启用免费上游，付费一律关闭；免费额度用尽自动停用，绝不静默转付费。<br>纯 Python 标准库实现，不依赖 Docker 与任何第三方包。
 source=thirdparty
@@ -13,4 +13,4 @@ desktop_applaunchname=deepseek-gateway.main
 service_port=18787
 checkport=true
 ctl_stop=true
-changelog=1.5.1：opencode 上游连不上时给出可操作提示（告诉你去启动 opencode serve 或停用该行），不再只抛 Errno 111。1.5.0：安装向导改为纯说明页，口令/策略/冷却/密钥全部在面板里配置。1.4.0：面板内填/清密钥。1.3.0：华为云 MaaS 与 NVIDIA NIM 免费上游。1.2.0：type=opencode 上游；面板自检。1.1.0：默认只启用免费上游；免费额度硬卡；providers.d/。1.0.0：首个版本。
+changelog=1.6.0：新增独立「设置」页——接口、模型、代理、密钥、额度、价格全部可视化编辑，每个上游带「去获取 Key」跳转；接入飞牛统一网关，桌面图标免口令直接用 NAS 账号登录；保留端口直连入口作为兜底。1.5.1：opencode 连不上时给出可操作提示。1.5.0：安装向导改为纯说明页。1.4.0：面板内填/清密钥。1.3.0：华为云 MaaS 与 NVIDIA NIM。1.2.0：type=opencode 上游；自检。1.1.0：免费优先；额度硬卡。1.0.0：首个版本。
