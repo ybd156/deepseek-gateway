@@ -79,6 +79,11 @@ fi
 
 # ── 2) opencode ──
 echo "安装 opencode-ai 到 $npm_config_prefix …"
+# 先清掉旧的可执行文件和包目录：npm 遇到已存在的 bin 会报 EEXIST 直接失败，
+# 导致 v2 装不上、静默回落到 v1（v1 已不支持免费模型）。
+rm -f "$npm_config_prefix/bin/opencode" "$npm_config_prefix/bin/opencode2" 2>/dev/null
+rm -rf "$npm_config_prefix/lib/node_modules/opencode-ai"        "$npm_config_prefix/lib/node_modules/@opencode" 2>/dev/null
+
 INSTALLED=""
 # 优先装 v2（@opencode/cli）：v1（opencode-ai，0.x/1.x）已不再支持免费模型
 for PKG in "@opencode/cli" "opencode-ai"; do
@@ -86,6 +91,12 @@ for PKG in "@opencode/cli" "opencode-ai"; do
     if "$NPM_BIN" install -g --prefix "$npm_config_prefix" --no-fund --no-audit --loglevel=error "$PKG"; then
         INSTALLED="$PKG"
         echo "已安装：$PKG"
+        break
+    fi
+    echo "重试 $PKG（--force，清理 bin 链接冲突）…"
+    if "$NPM_BIN" install -g --force --prefix "$npm_config_prefix" --no-fund --no-audit --loglevel=error "$PKG"; then
+        INSTALLED="$PKG"
+        echo "已安装（--force）：$PKG"
         break
     fi
     echo "$PKG 安装失败，换下一个…"
