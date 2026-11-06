@@ -679,21 +679,29 @@ async function ocRefresh() {
 
 function ocPaint(d) {
   const st = d.login_state || {};
+  const cli = !!d.cli_mode;
   const setTag = (id, text, cls) => {
     const e = document.getElementById(id);
     if (e) { e.textContent = text; e.className = 'tag ' + cls; }
   };
   setTag('ocTagInstall', '安装 · ' + (d.installed ? (d.bin_version || '已装') : '未装'),
     d.installed ? 'g' : 'd');
-  setTag('ocTagLogin', '登录 · ' + (st.state === 'done' ? '已登录'
-    : (st.state === 'idle' ? '未登录' : '进行中')), st.state === 'done' ? 'g' : 'y');
-  setTag('ocTagRun', '运行 · ' + (d.running ? ('pid ' + d.pid) : '未运行'),
-    d.running ? 'g' : 'd');
+  if (cli) {
+    setTag('ocTagLogin', '登录 · 不需要', 'g');
+    setTag('ocTagRun', '运行 · 不需要', 'g');
+  } else {
+    setTag('ocTagLogin', '登录 · ' + (st.state === 'done' ? '已登录'
+      : (st.state === 'idle' ? '未登录' : '进行中')), st.state === 'done' ? 'g' : 'y');
+    setTag('ocTagRun', '运行 · ' + (d.running ? ('pid ' + d.pid) : '未运行'),
+      d.running ? 'g' : 'd');
+  }
 
+  const nodeTxt = d.node_version || (d.node ? '?' : '');
   document.getElementById('ocEnv').textContent =
-    'Node ' + (d.node_version || (d.node ? '?' : '未找到'))
-    + ' · npm ' + (d.npm_version || '—')
-    + ' · opencode ' + (d.bin ? ((d.bin_version || '?') + '　' + d.bin) : '未安装');
+    (nodeTxt ? ('Node ' + nodeTxt + ' · npm ' + (d.npm_version || '—') + ' · ')
+      : (d.installed ? 'opencode 自带运行时（不需要 Node）· ' : 'Node 未找到 · '))
+    + 'opencode ' + (d.bin ? ((d.bin_version || '?') + '　' + d.bin) : '未安装')
+    + (d.mode_note ? ('　—　' + d.mode_note) : '');
 
   document.getElementById('ocLog').textContent =
     (d.last_error ? ('[错误] ' + d.last_error + ' | ') : '') + (d.log || '（暂无日志）');
@@ -701,7 +709,7 @@ function ocPaint(d) {
   document.getElementById('ocOwnLog').textContent = d.oc_logs || '（暂无）';
 
   const gd = document.getElementById('ocGuide');
-  if (gd && st.title) {
+  if (gd && st.title && !cli) {
     let h = '<div class="card" style="padding:14px">';
     h += '<div style="font-weight:700">' + esc(st.title) + '</div>';
     h += '<div class="sub" style="margin-top:6px">' + esc(st.hint || '') + '</div>';
@@ -722,7 +730,14 @@ function ocPaint(d) {
     }
     h += '</div>';
     gd.innerHTML = h;
-  } else if (gd) gd.innerHTML = '';
+  } else if (gd) {
+    gd.innerHTML = cli
+      ? '<div class="card" style="padding:14px"><div style="font-weight:700">'
+        + '命令行模式：装好就能用</div>'
+        + '<div class="sub" style="margin-top:6px">不启动服务、不登录也能跑免费模型。'
+        + '上面「试一句」通了就说明可用。</div></div>'
+      : '';
+  }
 }
 
 let ocLast = '';
