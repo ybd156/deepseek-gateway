@@ -1158,6 +1158,15 @@ class Handler(BaseHTTPRequestHandler):
             ok, msg = SUPERVISOR.stop()
         elif action == "install":
             ok, msg = SUPERVISOR.install()
+        elif action == "diagnose":
+            port = int(opencode_opts().get("port") or 4096)
+            base = "http://127.0.0.1:%d" % port
+            client = OpenCodeClient(base_url=base, model_id="", timeout=12)
+            payload = SUPERVISOR.status()
+            payload.update({"ok": True, "message": "诊断完成",
+                            "diag": client.diagnose()})
+            self.send_json(200, payload)
+            return
         elif action == "log":
             ok, msg = True, "ok"
         else:
@@ -1219,6 +1228,16 @@ class Handler(BaseHTTPRequestHandler):
             patch["gateway_token"] = str(body["gateway_token"] or "").strip()
         if "proxy" in body:
             patch["proxy"] = str(body["proxy"] or "").strip()
+        if "opencode_port" in body:
+            try:
+                patch["opencode_port"] = max(1, min(int(body["opencode_port"]), 65535))
+            except Exception:
+                self.send_json(400, {"ok": False, "error": "opencode 端口必须是整数"})
+                return
+        if "opencode_autostart" in body:
+            patch["opencode_autostart"] = bool(body["opencode_autostart"])
+        if "opencode_bin" in body:
+            patch["opencode_bin"] = str(body["opencode_bin"] or "").strip()
 
         if not patch:
             self.send_json(400, {"ok": False, "error": "没有要更新的字段"})
@@ -1790,6 +1809,7 @@ _SETTINGS_BODY = """
       <button onclick="ocAction('install')">一键安装</button>
       <button onclick="ocAction('start')">启动</button>
       <button onclick="ocAction('stop')">停止</button>
+      <button onclick="ocAction('diagnose')">诊断</button>
       <button onclick="ocRefresh()">刷新状态</button>
     </div>
     <pre id="ocLog" style="max-height:170px;overflow:auto;background:#0d1117;border:1px solid var(--line);border-radius:8px;padding:8px;font-size:11px;margin:8px 0 0"></pre>
@@ -2073,6 +2093,10 @@ async function ocAction(action){
     const d = await api('/admin/api/opencode', {method:'POST', body: JSON.stringify({action})});
     msg((d.ok ? '[成功] ' : '[失败] ') + (d.message || ''));
     ocPaint(d);
+    if(action === 'diagnose' && d.diag){
+      document.getElementById('ocLog').textContent =
+        JSON.stringify(d.diag, null, 2);
+    }
   }catch(e){ msg('操作失败：' + e.message); }
 }
 
