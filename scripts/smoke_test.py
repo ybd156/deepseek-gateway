@@ -663,6 +663,53 @@ def main() -> int:
         u = next((x for x in tk2["tokens"] if x["id"] == tid2), {})
         check(u.get("used_tokens", 0) > 0, "按令牌统计用量", str(u.get("used_tokens")))
 
+        print("== 17. 代理测试 / Key 显示 / 磁盘回显 ==")
+        # 假代理只会把流量转给假上游（明文 HTTP），所以测试目标用 http
+        code, _, txt = http("POST", base + "/admin/api/proxy-test",
+                            {"proxy": f"socks5://127.0.0.1:{SOCKS_PORT}",
+                             "target": f"http://127.0.0.1:{UP_PORT}/"})
+        pt = json.loads(txt) if code == 200 else {}
+        check(code == 200 and pt.get("ok") is True, "代理测试连通（走 SOCKS5 隧道）",
+              f"{pt.get('status')} {pt.get('error','')}")
+        check("ms" in pt, "返回耗时", str(pt.get("ms")))
+
+        # HTTPS 目标：假代理不是 TLS 服务，应当失败在握手阶段——
+        # 这恰好证明"隧道建立 + TLS 发起"都走到了
+        code, _, txt = http("POST", base + "/admin/api/proxy-test",
+                            {"proxy": f"socks5://127.0.0.1:{SOCKS_PORT}"})
+        ph = json.loads(txt) if code == 200 else {}
+        check(ph.get("ok") is False and "SSL" in str(ph.get("error", "")).upper(),
+              "HTTPS 经隧道会发起 TLS 握手", str(ph.get("error"))[:70])
+
+        code, _, txt = http("POST", base + "/admin/api/proxy-test",
+                            {"proxy": "socks5://127.0.0.1:1"})
+        pf = json.loads(txt) if code == 200 else {}
+        check(pf.get("ok") is False, "坏代理如实报失败", str(pf.get("error"))[:60])
+
+        # Key 显示
+        code, _, txt = http("POST", base + "/admin/api/tokens",
+                            {"action": "create", "name": "看看key", "quota_tokens": 0})
+        d3 = json.loads(txt)
+        tid3 = (d3.get("token") or {}).get("id", "")
+        key3 = (d3.get("token") or {}).get("key", "")
+        code, _, txt = http("POST", base + "/admin/api/tokens",
+                            {"action": "reveal", "id": tid3})
+        rv = json.loads(txt) if code == 200 else {}
+        check(rv.get("key") == key3, "reveal 返回完整 Key", str(rv.get("key"))[:14])
+        code, _, _ = http("POST", base + "/admin/api/tokens",
+                          {"action": "reveal", "id": "nope"})
+        check(code == 404, "不存在的令牌返回 404", str(code))
+
+        # 保存回显：磁盘上到底存了什么
+        code, _, txt = http("GET", base + "/admin/api/config")
+        cfg3 = json.loads(txt)
+        cfg3["proxy"] = f"socks5://127.0.0.1:{SOCKS_PORT}"
+        code, _, txt = http("POST", base + "/admin/api/config", cfg3)
+        d4 = json.loads(txt)
+        od = d4.get("on_disk") or {}
+        check(od.get("proxy") == f"socks5://127.0.0.1:{SOCKS_PORT}",
+              "磁盘确认代理已落盘", str(od))
+
     finally:
         proc.terminate()
         try:
