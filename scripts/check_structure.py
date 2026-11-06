@@ -219,6 +219,26 @@ def main() -> int:
     except Exception as exc:                           # noqa: BLE001
         check(False, "收集范围检查", str(exc))
 
+    print("== 7d. 换行符（Linux 上 CRLF 会让 shell 脚本直接崩）==")
+    try:
+        import os as _os
+        bad = []
+        for _root, _dirs, _files in _os.walk("."):
+            _dirs[:] = [d for d in _dirs
+                        if d not in (".git", "__pycache__", ".testtmp", "dist")]
+            for _fn in _files:
+                if _fn.lower().endswith((".png", ".jpg", ".jpeg", ".gif", ".fpk", ".zip")):
+                    continue
+                _p = _os.path.join(_root, _fn)
+                try:
+                    if bytes([13, 10]) in open(_p, "rb").read():
+                        bad.append(_p)
+                except Exception:
+                    pass
+        check(not bad, "文本文件都是 LF 换行", ", ".join(bad[:5]))
+    except Exception as exc:                           # noqa: BLE001
+        check(False, "换行符检查", str(exc))
+
     print("== 8. 图标尺寸 ==")
     try:
         from PIL import Image
