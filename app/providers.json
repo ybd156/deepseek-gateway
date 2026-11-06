@@ -21,8 +21,10 @@
       "price_in": 0,
       "price_out": 0,
       "quant": "-",
-      "note": "OpenCode 免费档：先在本机跑 opencode serve（见 README）；限时免费、无流式、200K 上下文",
-      "console_url": "https://opencode.ai/docs/zen"
+      "note": "OpenCode 免费档：先在本机跑 opencode serve（设置页可一键安装/启动）；默认用只读 agent「plan」，避免 agent 循环把请求拖到超时",
+      "console_url": "https://opencode.ai/docs/zen",
+      "opencode_agent": "plan",
+      "timeout": 300
     },
     {
       "name": "nvidia-nim",
