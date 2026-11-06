@@ -161,7 +161,9 @@ sudo mv fnpack-1.2.3-linux-amd64 /usr/local/bin/fnpack
 
 状态页右上角点「⚙ 设置」，或直接开 `http://<nas>:18787/settings`。
 
-**全局**：访问口令（留空=免口令，可「清除」）、排序策略、失败冷却、**全局代理**。
+**全局**：访问口令（留空=免口令，可「清除」）、排序策略、失败冷却、**全局代理**
+（协议下拉可选 **HTTP / HTTPS / SOCKS5 / SOCKS5-代理解析域名**，地址填 `主机:端口`）。
+SOCKS5 由标准库自实现隧道，不依赖 PySocks。
 
 **每个上游一张卡片**，全部可视化编辑：
 
@@ -181,8 +183,19 @@ sudo mv fnpack-1.2.3-linux-amd64 /usr/local/bin/fnpack
 | 控制台 | 「**去获取 Key ↗**」按钮跳转的地址 |
 | 备注 | 面板上显示的一行说明 |
 
-底部按钮：**保存全部**（一次写完 providers.json + secrets.json + settings.json 并热重载）、
-**+ 新增上游**（自动插入一张空白卡片）、**重新载入**、每张卡片的**自检**和**删除**。
+底部按钮：
+
+| 按钮 | 作用 |
+|---|---|
+| **保存全部** | 一次写完 providers.json + secrets.json + settings.json 并热重载 |
+| **+ OpenAI 兼容接口** | 插入任意 OpenAI 兼容服务的模板（填 base_url / 模型 / Key 即可） |
+| **+ OpenRouter** | 插入 OpenRouter 模板（一个 Key 打通 40+ provider） |
+| **+ 本地 Ollama** | 插入本地 Ollama/vLLM/LM Studio 模板（**免密钥**，`no_auth: true`） |
+| **+ 空白上游** | 从零填 |
+| 每张卡片 | **自检** / **删除** |
+
+**免密钥上游**：勾选卡片里的「免密钥」后，即使没有 Key 也会参与路由——本地 Ollama、vLLM、
+LM Studio 这类不需要鉴权的服务用这个。面板上密钥来源会显示为「免密钥」。
 
 密钥落盘在 `@appdata/deepseek-gateway/secrets.json`（600），不会出现在 `ps` 里。
 
