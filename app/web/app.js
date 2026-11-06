@@ -102,6 +102,8 @@ function currentTab() {
   let p = location.pathname;
   while (p.length > 1 && p.endsWith('/')) p = p.slice(0, -1);
   if (p.indexOf('/logs') >= 0) return 'logs';
+  if (p.indexOf('/advanced') >= 0) return 'advanced';
+  if (p.indexOf('/models') >= 0) return 'models';
   if (p.indexOf('/stats') >= 0) return 'stats';
   if (p.indexOf('/settings') >= 0) return 'settings';
   return 'overview';
@@ -114,8 +116,10 @@ function showTab(name) {
   document.querySelectorAll('#nav a').forEach(a => {
     a.classList.toggle('on', a.dataset.tab === name);
   });
-  if (name === 'logs') { loadUsage(); loadGwLog(); }
+  if (name === 'logs') { loadUsage(); loadErrors(); loadGwLog(); }
   if (name === 'stats') loadStats();
+  if (name === 'models') { loadCfg().then(loadCaps); }
+  if (name === 'advanced') loadCfg();
   if (name === 'tokens') loadTokens();
   if (name === 'providers') loadCfg();
   if (name === 'settings') { loadCfg(); ocRefresh(); }
@@ -449,6 +453,20 @@ function renderSettings() {
   document.getElementById('ocAuto').checked = oc.autostart !== false;
   const k = document.getElementById('ocKey');
   if (k) k.placeholder = oc.key_set ? '已设置（留空不改）' : '留空 = 未设置';
+  document.getElementById('advShort').value = CFG.timeout_short || 120;
+  document.getElementById('advFirst').value = CFG.timeout_first_byte || 120;
+  document.getElementById('advIdle').value = CFG.timeout_stream_idle || 300;
+  document.getElementById('advUA').value = CFG.user_agent || '';
+  document.getElementById('advBlack').value = CFG.model_blacklist || '';
+  document.getElementById('advWhite').value = CFG.model_whitelist || '';
+  document.getElementById('advMap').value = CFG.model_mapping || '';
+  document.getElementById('advSysMode').value = CFG.system_mode || 'passthrough';
+  document.getElementById('advSysFile').value = CFG.system_file || '';
+  document.getElementById('advSysText').value = CFG.system_text || '';
+  document.getElementById('advRounds').value = CFG.keep_rounds || 0;
+  document.getElementById('advLogSource').checked = CFG.log_source !== false;
+  document.getElementById('effDefault').value = CFG.effort_default || 'max';
+  document.getElementById('effMode').value = CFG.effort_mode || 'client';
   document.getElementById('sanOn').checked = !!CFG.sanitize;
   document.getElementById('sanScope').value = CFG.sanitize_scope || 'all';
   document.getElementById('sanWords').value = CFG.sanitize_words || '';
@@ -845,27 +863,101 @@ async function verifyKey() {
 // ── 日志 ────────────────────────────────────────────────
 let autoTimer = null;
 
+let LOGROWS = [];
+
 async function loadUsage() {
   const sel = document.getElementById('logLimit');
   const n = sel ? sel.value : 300;
   try {
     const d = await api('/admin/api/logs?kind=usage&limit=' + n);
     if (!d.ok) { document.getElementById('logMsg').textContent = '读取失败：' + (d.error || ''); return; }
-    const rows = (d.rows || []).map(r =>
-      '<tr>'
+    LOGROWS = d.rows || [];
+    renderLog();
+  } catch (e) { /* 忽略 */ }
+}
+
+function fmtTok(n) {
+  if (!n) return '0';
+  if (n >= 1000) return (n / 1000).toFixed(1) + 'k';
+  return String(n);
+}
+
+function renderLog() {
+  const f = document.getElementById('logFilter').value;
+  const q = (document.getElementById('logSearch').value || '').trim().toLowerCase();
+  let rows = LOGROWS;
+  if (f === 'ok') rows = rows.filter(r => r.ok);
+  if (f === 'fail') rows = rows.filter(r => !r.ok);
+  if (q) {
+    rows = rows.filter(r => (r.client_ip + ' ' + r.user_agent + ' ' + r.model
+      + ' ' + r.request_id + ' ' + r.provider + ' ' + r.token).toLowerCase().indexOf(q) >= 0);
+  }
+
+  // 顶部汇总
+  const done = LOGROWS.length;
+  const okN = LOGROWS.filter(r => r.ok).length;
+  const okRate = done ? (okN / done * 100).toFixed(1) : '0.0';
+  const avg = done ? (LOGROWS.reduce((a, r) => a + (r.ms || 0), 0) / done / 1000) : 0;
+  const tok = LOGROWS.reduce((a, r) => a + (r.tokens_in || 0) + (r.tokens_out || 0), 0);
+  const card = (k, v, sub) => '<div class="card stat"><div class="k">' + k
+    + '</div><div class="v">' + v + '</div>'
+    + (sub ? '<div class="sub">' + sub + '</div>' : '') + '</div>';
+  document.getElementById('logCards').innerHTML =
+    card('已完成', done) + card('成功率', okRate + '%')
+    + card('平均耗时', avg.toFixed(2) + 's') + card('Token 合计', fmtTok(tok));
+
+  document.getElementById('logBody').innerHTML = rows.map(r => {
+    const cls = r.ok ? 'g' : 'r';
+    const eff = r.effort ? ('→' + r.effort) : '';
+    const cache = r.tokens_in
+      ? ('<span style="color:' + (r.cache_rate >= 50 ? 'var(--ok)' : 'var(--dim)') + '">'
+        + r.cache_rate + '%</span><div class="sub">命中 ' + fmtTok(r.cache_hit)
+        + ' / 未命中 ' + fmtTok(r.cache_miss) + '</div>')
+      : '-';
+    const speed = r.tps ? r.tps + ' t/s' : '-';
+    const ua = r.user_agent ? (r.user_agent.length > 26
+      ? r.user_agent.slice(0, 26) + '…' : r.user_agent) : '-';
+    return '<tr>'
       + '<td class="nowrap mono">' + r.time + '</td>'
-      + '<td>' + esc(r.provider) + '</td>'
+      + '<td><span class="tag ' + cls + '">' + r.status + ' '
+      + (r.ok ? '成功' : '失败') + '</span>'
+      + (r.err ? ' <span class="err" title="' + esc(r.err) + '">!</span>' : '') + '</td>'
       + '<td class="mono clip" title="' + esc(r.model) + '">' + esc(r.model) + '</td>'
-      + '<td>' + esc(r.token) + '</td>'
-      + '<td><span class="tag ' + (r.ok ? 'g' : 'r') + '">' + (r.ok ? '成功' : '失败') + '</span></td>'
-      + '<td class="nowrap">' + r.tokens_in + ' / ' + r.tokens_out + '</td>'
-      + '<td class="mono nowrap">$' + r.cost.toFixed(4) + '</td>'
-      + '<td class="nowrap">' + r.ms + 'ms</td>'
-      + '<td><span class="err" title="' + esc(r.err) + '">' + (esc(r.err) || '-') + '</span></td>'
-      + '</tr>').join('');
-    document.getElementById('logBody').innerHTML =
-      rows || '<tr><td colspan="9" class="sub">还没有调用记录</td></tr>';
-    document.getElementById('logMsg').textContent = '共 ' + (d.rows || []).length + ' 条';
+      + '<td class="sub clip">' + esc(r.token) + '</td>'
+      + '<td class="sub nowrap">' + eff + '</td>'
+      + '<td class="nowrap">' + (r.stream ? 'SSE' : 'JSON')
+      + '<div class="sub">' + esc(r.provider) + '</div></td>'
+      + '<td class="nowrap">' + (r.first_byte_ms ? (r.first_byte_ms / 1000).toFixed(1) + 's' : '-') + '</td>'
+      + '<td class="nowrap">' + (r.ms / 1000).toFixed(2) + 's</td>'
+      + '<td class="nowrap">' + speed + '</td>'
+      + '<td class="nowrap">↑' + fmtTok(r.tokens_in) + '<br>↓' + fmtTok(r.tokens_out) + '</td>'
+      + '<td class="nowrap">' + cache + '</td>'
+      + '<td class="mono nowrap">' + esc(r.client_ip || '-') + '</td>'
+      + '<td class="sub clip" title="' + esc(r.user_agent) + '">' + esc(ua) + '</td>'
+      + '<td class="mono sub clip" title="' + esc(r.request_id) + '">'
+      + esc(r.request_id || '-') + '</td>'
+      + '</tr>';
+  }).join('') || '<tr><td colspan="14" class="sub">还没有调用记录</td></tr>';
+
+  document.getElementById('logMsg').textContent =
+    '显示 ' + rows.length + ' / ' + done + ' 条';
+}
+
+async function loadErrors() {
+  try {
+    const d = await api('/admin/api/errors');
+    if (!d.ok) { document.getElementById('errSummary').textContent = '读取失败'; return; }
+    document.getElementById('errSummary').textContent =
+      '共 ' + d.rows.length + ' 类，' + d.kinds + ' 种类型';
+    document.getElementById('errBody').innerHTML = (d.rows || []).map(r =>
+      '<tr><td>' + esc(r.provider) + '</td>'
+      + '<td><span class="tag r">' + esc(r.kind) + '</span></td>'
+      + '<td class="mono">' + r.status + '</td>'
+      + '<td>' + r.count + '</td>'
+      + '<td class="nowrap mono">' + r.last_time + '</td>'
+      + '<td class="sub clip" title="' + esc(r.sample) + '">' + esc(r.sample) + '</td>'
+      + '</tr>').join('')
+      || '<tr><td colspan="6" class="sub">没有失败记录</td></tr>';
   } catch (e) { /* 忽略 */ }
 }
 
@@ -880,7 +972,7 @@ async function loadGwLog() {
 function toggleAuto() {
   const on = document.getElementById('autoLog').checked;
   if (autoTimer) { clearInterval(autoTimer); autoTimer = null; }
-  if (on) autoTimer = setInterval(() => { loadUsage(); loadGwLog(); }, 5000);
+  if (on) autoTimer = setInterval(() => { loadUsage(); loadErrors(); loadGwLog(); }, 5000);
 }
 
 
@@ -933,6 +1025,103 @@ async function saveSanitize() {
         + '，作用域 ' + body.sanitize_scope);
     } else msg('San', '保存失败：' + (d.error || ''));
   } catch (e) { msg('San', '保存失败：' + e.message); }
+}
+
+
+// ── 模型能力 ────────────────────────────────────────────
+let CAPS = [];
+
+async function loadCaps() {
+  try {
+    const d = await api('/admin/api/caps');
+    if (!d.ok) { msg('Models', '读取失败：' + (d.error || '')); return; }
+    CAPS = d.models || [];
+    document.getElementById('capsSummary').textContent =
+      '共 ' + d.count + ' 个模型，' + d.vision_count + ' 个支持图片，'
+      + d.with_reasoning + ' 个支持多档思考';
+
+    const warn = document.getElementById('effWarn');
+    const bad = d.unsupported_default || [];
+    warn.textContent = bad.length
+      ? ('⚠ 有 ' + bad.length + ' 个模型不支持「' + d.default_effort + '」，会自动落到：'
+        + bad.slice(0, 6).map(x => x.model + '→' + (x.falls_to || 'off')).join('、')
+        + (bad.length > 6 ? ' …' : '') + '（可在下表逐条指定）')
+      : '';
+
+    document.getElementById('capsBody').innerHTML = CAPS.map((m, i) => {
+      const ctx = m.context ? (m.context >= 1000
+        ? Math.round(m.context / 1000) + 'K' : m.context) : '-';
+      const tiers = (m.reasoning || []).join(' / ') || 'off';
+      const opts = ['off', 'low', 'medium', 'high', 'max'].map(t => {
+        const sel = (m.override && m.override.effort === t) ? ' selected' : '';
+        return '<option value="' + t + '"' + sel + '>' + t + '</option>';
+      }).join('');
+      return '<tr>'
+        + '<td class="mono clip" title="' + esc(m.model) + '">' + esc(m.model)
+        + (m.known ? '' : ' <span class="tag y">未知</span>') + '</td>'
+        + '<td class="sub">' + esc(m.provider) + '</td>'
+        + '<td><input class="capin" type="number" value="' + (m.context || '')
+        + '" data-m="' + esc(m.model) + '" data-k="context"></td>'
+        + '<td><input type="checkbox"' + (m.vision ? ' checked' : '')
+        + ' data-m="' + esc(m.model) + '" data-k="vision"></td>'
+        + '<td class="sub">' + esc(tiers) + '</td>'
+        + '<td><select class="capin" data-m="' + esc(m.model) + '" data-k="effort">'
+        + '<option value="">跟随默认</option>' + opts + '</select></td>'
+        + '</tr>';
+    }).join('') || '<tr><td colspan="6" class="sub">还没有模型</td></tr>';
+  } catch (e) { msg('Models', '读取失败：' + e.message); }
+}
+
+function collectCaps() {
+  const out = {};
+  document.querySelectorAll('#capsBody [data-m]').forEach(el => {
+    const m = el.dataset.m, k = el.dataset.k;
+    out[m] = out[m] || {};
+    if (k === 'vision') out[m].vision = el.checked;
+    else if (k === 'context') out[m].context = Number(el.value || 0);
+    else out[m].effort = el.value;
+  });
+  Object.keys(out).forEach(m => {
+    if (out[m].context === 0) delete out[m].context;
+    if (!out[m].effort) delete out[m].effort;
+    if (!Object.keys(out[m]).length) delete out[m];
+  });
+  return out;
+}
+
+async function saveEffort() {
+  const body = {
+    effort_default: document.getElementById('effDefault').value,
+    effort_mode: document.getElementById('effMode').value
+  };
+  try {
+    const d = await api('/admin/api/config', { method: 'POST', body: JSON.stringify(body) });
+    if (d.providers) { CFG = d; msg('Models', '已保存档位策略'); loadCaps(); }
+    else msg('Models', '保存失败：' + (d.error || ''));
+  } catch (e) { msg('Models', '保存失败：' + e.message); }
+}
+
+async function saveAdvanced() {
+  const body = {
+    timeout_short: Number(document.getElementById('advShort').value || 120),
+    timeout_first_byte: Number(document.getElementById('advFirst').value || 120),
+    timeout_stream_idle: Number(document.getElementById('advIdle').value || 300),
+    user_agent: document.getElementById('advUA').value,
+    model_blacklist: document.getElementById('advBlack').value,
+    model_whitelist: document.getElementById('advWhite').value,
+    model_mapping: document.getElementById('advMap').value,
+    system_mode: document.getElementById('advSysMode').value,
+    system_file: document.getElementById('advSysFile').value,
+    system_text: document.getElementById('advSysText').value,
+    keep_rounds: Number(document.getElementById('advRounds').value || 0),
+    log_source: document.getElementById('advLogSource').checked,
+    model_caps: collectCaps()
+  };
+  try {
+    const d = await api('/admin/api/config', { method: 'POST', body: JSON.stringify(body) });
+    if (d.providers) { CFG = d; msg('Advanced', '已保存'); }
+    else msg('Advanced', '保存失败：' + (d.error || ''));
+  } catch (e) { msg('Advanced', '保存失败：' + e.message); }
 }
 
 // ── 启动 ────────────────────────────────────────────────
