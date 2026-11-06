@@ -1887,8 +1887,7 @@ class Handler(BaseHTTPRequestHandler):
                            "client_ip": client_ip(self),
                            "user_agent": self.headers.get("User-Agent") or "",
                            "effort": str(payload.get("reasoning_effort") or ""),
-                           "upstream_model": str(data.get("_upstream")
-                                                 or p["model"]),
+                           "upstream_model": str(data.get("_upstream") or payload.get("_route_model") or p["model"]),
                            "request_id": str(data.get("id") or ""),
                            "status": 200,
                        })
@@ -1897,8 +1896,7 @@ class Handler(BaseHTTPRequestHandler):
                 if echo:
                     data["model"] = echo
                 extra = {"X-Gateway-Provider": p["name"],
-                         "X-Gateway-Upstream-Model": str(
-                             data.pop("_upstream", "") or p["model"])}
+                         "X-Gateway-Upstream-Model": str(data.get("_upstream") or payload.get("_route_model") or p["model"])}
                 if warn:
                     extra["X-Gateway-Warning"] = "model-mismatch"
                 caps = payload.get("_caps") or {}
@@ -1957,7 +1955,10 @@ class Handler(BaseHTTPRequestHandler):
                                "client_ip": client_ip(self),
                                "user_agent": self.headers.get("User-Agent") or "",
                                "effort": str(payload.get("reasoning_effort") or ""),
-                               "upstream_model": str(info.get("model") or p["model"]),
+                               "upstream_model": str(
+                                   info.get("model")
+                                   or payload.get("_route_model")
+                                   or p["model"]),
                                "request_id": str(info.get("id") or ""),
                                "status": 200,
                            })
