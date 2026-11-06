@@ -1,5 +1,5 @@
 appname=deepseek-gateway
-version=2.4.2
+version=2.5.0
 display_name=DeepSeek 网关
 desc=把火山方舟、硅基流动、OpenRouter、腾讯 TokenHub、百度千帆、DeepSeek 官方等多个上游聚合成一个 OpenAI 兼容端点。<br>默认只启用免费上游，付费一律关闭；免费额度用尽自动停用，绝不静默转付费。<br>纯 Python 标准库实现，不依赖 Docker 与任何第三方包。
 source=thirdparty
@@ -13,4 +13,4 @@ desktop_applaunchname=deepseek-gateway.main
 service_port=18787
 checkport=true
 ctl_stop=true
-changelog=2.4.2：opencode 超时后不再干等——从它自己的日志里捞出真实错误并显示（例如「Free usage limit reached」）；识别到免费池被限流时自动冷却该上游 1 小时，不再拖住后续每次请求；opencode 默认超时改为 150 秒（仅未配置时兜底）。2.4.1：分步探测 + opencode 自身日志。2.4.0：上游协议可选。2.3.x：日志页。2.2.x：设置拆页。1.1.0：免费优先。1.0.0：首个版本。
+changelog=2.5.0：opencode 上游新增「调用方式」——服务端 API（opencode serve）或命令行（opencode run）。cli 走客户端本体，可能绕过「免费模型只在 OpenCode 内可用」的限制；「试一句」也会按所选方式验证。2.4.2：超时捞出服务端原因、免费池限流自动冷却。2.4.0：上游协议可选。2.3.x：日志页。2.2.x：设置拆页。1.1.0：免费优先。1.0.0：首个版本。
