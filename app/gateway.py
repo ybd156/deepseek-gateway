@@ -476,12 +476,16 @@ def probe_upstream_caps(p: dict) -> dict:
 
 def refresh_caps(only: str = "") -> dict:
     """批量探测所有可用上游的能力，写进缓存。"""
-    got, failed = {}, []
+    got, failed, skipped = {}, [], []
     targets = [p for p in PROVIDERS if p["enabled"]]
     if only:
         targets = [p for p in targets if p["name"] == only]
     for p in targets:
         if not (p["api_key"] or p["no_auth"] or p["type"] == "opencode"):
+            continue
+        if p["type"] == "opencode":
+            # opencode 的 models 命令只给名字，不给上下文/图片，别当成失败
+            skipped.append(p["name"])
             continue
         caps = probe_upstream_caps(p)
         if not caps:
@@ -506,7 +510,7 @@ def refresh_caps(only: str = "") -> dict:
                 CAPS_CACHE[k] = v
         save_caps_cache()
     return {"ok": True, "updated": len(got), "failed": failed,
-            "cached": len(CAPS_CACHE)}
+            "skipped": skipped, "cached": len(CAPS_CACHE)}
 
 
 _USAGE_CACHE: dict = {"ts": 0.0, "data": {}}
@@ -2920,7 +2924,8 @@ def _caps_bootstrap() -> None:
         if now() - newest < CAPS_TTL:
             return
         res = refresh_caps()
-        print(f"[gateway] 能力探测：更新 {res['updated']} 个模型", flush=True)
+        print(f"[gateway] 能力探测：更新 {res['updated']} 个模型"
+              f"（跳过 {len(res.get('skipped') or [])} 个不提供元数据的上游）", flush=True)
     except Exception as exc:                           # noqa: BLE001
         print(f"[gateway] 能力探测失败（不影响使用）：{exc}", flush=True)
 
