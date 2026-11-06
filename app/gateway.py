@@ -92,6 +92,16 @@ _CURRENT = threading.local()      # 当前请求的令牌（线程本地）
 CONFIG_LOCK = threading.Lock()
 
 
+def _safe_header(v) -> str:
+    """HTTP 头只能是 latin-1；中文之类的字符会抛异常，统一降级成 ?。"""
+    text = str(v)
+    try:
+        text.encode("latin-1")
+        return text
+    except UnicodeEncodeError:
+        return text.encode("ascii", "replace").decode("ascii")
+
+
 class ProviderError(Exception):
     """上游失败（可切换到下一家）。"""
 
@@ -400,6 +410,50 @@ def quick_port_check(url: str, timeout: float = 0.6) -> bool:
         return False
 
 
+def discover_models(p: dict) -> dict:
+    """问上游「你有哪些模型」。http 走 GET /models，opencode 走 /config/providers。"""
+    try:
+        if p["type"] == "opencode":
+            client = OpenCodeClient(base_url=p["base_url"], model_id="",
+                                    provider_id=p["opencode_provider"], timeout=15)
+            ids = client.available_models()
+            return {"ok": True, "count": len(ids),
+                    "models": [{"id": i, "free": "free" in i.lower()} for i in ids]}
+
+        url = p["base_url"].rstrip("/") + "/models"
+        req = urllib.request.Request(url, headers=headers_for(p, False), method="GET")
+        opener = build_opener(p.get("proxy") or RUNTIME.get("proxy") or "", p["timeout"])
+        resp = opener.open(req, timeout=20) if opener else urllib.request.urlopen(req, timeout=20)
+        try:
+            raw = resp.read()
+        finally:
+            resp.close()
+        data = json.loads(raw.decode("utf-8", "ignore"))
+        items = data.get("data") if isinstance(data, dict) else data
+        out = []
+        for it in items or []:
+            if isinstance(it, str):
+                mid, free, price = it, "free" in it.lower(), None
+            elif isinstance(it, dict):
+                mid = str(it.get("id") or it.get("name") or "")
+                price = None
+                pr = it.get("pricing") or {}
+                try:
+                    if pr and str(pr.get("prompt", "")).replace(".", "") == "0"                             and str(pr.get("completion", "")).replace(".", "") == "0":
+                        price = 0.0
+                except Exception:
+                    price = None
+                free = ("free" in mid.lower()) or price == 0.0
+            else:
+                continue
+            if not mid:
+                continue
+            out.append({"id": mid, "free": bool(free)})
+        return {"ok": True, "count": len(out), "models": out}
+    except Exception as exc:                        # noqa: BLE001
+        return {"ok": False, "error": err_text(exc)}
+
+
 def test_proxy(proxy_url: str, target: str = "https://api.deepseek.com/") -> dict:
     """真连一次：走该代理请求一个地址，返回耗时与状态。"""
     opener = build_opener(proxy_url, 8)
@@ -467,6 +521,16 @@ def provider_key_source(p: dict, sec: dict | None = None) -> str:
     return "无"
 
 
+def _as_list(v) -> list:
+    """把逗号/换行分隔的字符串或数组，统一成字符串列表。"""
+    if not v:
+        return []
+    if isinstance(v, (list, tuple)):
+        return [str(x).strip() for x in v if str(x).strip()]
+    parts = str(v).replace(chr(10), ",").split(",")
+    return [x.strip() for x in parts if x.strip()]
+
+
 def provider_files() -> list[str]:
     """主配置 + providers.d/ 下所有 *.json（便于单独新增上游，不必改主文件）。"""
     files = [CONFIG_PATH]
@@ -526,6 +590,7 @@ def load_config() -> None:
                 "name": name,
                 "base_url": str(it["base_url"]).rstrip("/"),
                 "model": it["model"],
+                "models": _as_list(it.get("models")),
                 "api_key": (key or "").strip(),
                 "key_env": key_env or "",
                 "priority": int(it.get("priority", 100)),
@@ -659,7 +724,7 @@ def usage_summary() -> dict:
 
 
 # ─────────────────────────── 路由 ───────────────────────────
-def candidates(strategy: str) -> list[dict]:
+def candidates(strategy: str, want_model: str = "") -> list[dict]:
     now = time.time()
     used = used_tokens()
     with STATE_LOCK:
@@ -674,6 +739,9 @@ def candidates(strategy: str) -> list[dict]:
         live.sort(key=lambda p: (p["price_in"] + p["price_out"], p["priority"]))
     else:
         live.sort(key=lambda p: p["priority"])
+    if want_model:
+        # 能提供这个模型的上游排到前面（稳定排序，组内仍按策略）
+        live.sort(key=lambda p: 0 if (want_model == p["model"] or want_model in (p.get("models") or [])) else 1)
     return live
 
 
@@ -695,9 +763,20 @@ def mark_ok(p: dict) -> None:
         st["last_ok_at"] = time.time()
 
 
+def pick_model(p: dict, payload: dict) -> str:
+    """客户端点名了该上游的某个模型就用它，否则用默认模型。"""
+    want = str(payload.get("model") or "").strip()
+    if want and want in (p.get("models") or []):
+        return want
+    return p["model"] or (p.get("models") or [""])[0]
+
+
 def build_body(p: dict, payload: dict, stream: bool) -> bytes:
     body = dict(payload)
-    body["model"] = p["model"]
+    body["model"] = pick_model(p, payload)
+    if os.getenv("DSGW_DEBUG"):
+        print(f"[dbg] {p['name']} want={payload.get('model')!r} "
+              f"models={p.get('models')!r} -> {body['model']!r}", flush=True)
     if p["extra"]:
         body.update(p["extra"])
     if stream:
@@ -884,7 +963,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Access-Control-Allow-Headers", "Authorization, Content-Type, X-Api-Key")
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
         for k, v in (extra or {}).items():
-            self.send_header(k, v)
+            self.send_header(k, _safe_header(v))
         self.end_headers()
         try:
             self.wfile.write(body)
@@ -955,10 +1034,13 @@ class Handler(BaseHTTPRequestHandler):
                 return
             seen, data = set(), []
             for p in PROVIDERS:
-                if p["model"] in seen:
-                    continue
-                seen.add(p["model"])
-                data.append({"id": p["model"], "object": "model", "owned_by": p["name"]})
+                ids = [p["model"]] + list(p.get("models") or [])
+                for mid in ids:
+                    mid = str(mid or "").strip()
+                    if not mid or mid in seen:
+                        continue
+                    seen.add(mid)
+                    data.append({"id": mid, "object": "model", "owned_by": p["name"]})
             self.send_json(200, {"object": "list", "data": data})
         elif path == "/admin/api/status":
             if not authorized(self):
@@ -991,6 +1073,8 @@ class Handler(BaseHTTPRequestHandler):
             self.handle_tokens()
         elif path == "/admin/api/proxy-test":
             self.handle_proxy_test()
+        elif path == "/admin/api/discover":
+            self.handle_discover()
         elif path == "/admin/api/reload":
             if not authorized(self):
                 self.send_json(401, {"error": "unauthorized"})
@@ -1061,6 +1145,23 @@ class Handler(BaseHTTPRequestHandler):
                 "ms": int((time.time() - t0) * 1000),
                 "error": err_text(exc)[:300],
             })
+
+    def handle_discover(self) -> None:
+        """探测某个上游有哪些模型。"""
+        if not authorized(self):
+            self.send_json(401, {"error": "unauthorized"})
+            return
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+            name = str(json.loads(self.rfile.read(length) or b"{}").get("name", ""))
+        except Exception:
+            self.send_json(400, {"ok": False, "error": "bad request"})
+            return
+        p = next((x for x in PROVIDERS if x["name"] == name), None)
+        if p is None:
+            self.send_json(404, {"ok": False, "error": "unknown provider"})
+            return
+        self.send_json(200, discover_models(p))
 
     def handle_proxy_test(self) -> None:
         if not authorized(self):
@@ -1326,6 +1427,7 @@ class Handler(BaseHTTPRequestHandler):
                 "key_source": source,
                 "priority": p["priority"],
                 "model": p["model"],
+                "models": list(p.get("models") or []),
                 "quant": p["quant"],
                 "price_in": p["price_in"],
                 "price_out": p["price_out"],
@@ -1394,6 +1496,8 @@ class Handler(BaseHTTPRequestHandler):
                     or RUNTIME["strategy"] or "priority").lower()
         if strategy not in ("priority", "cheapest"):
             strategy = "priority"
+        want = str(payload.get("model") or "").strip()
+        self.want_model = want
 
         if payload.get("stream"):
             self.handle_stream(payload, strategy)
@@ -1416,7 +1520,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("X-Gateway-Provider", p["name"])
         self.send_header("X-Gateway-Stream", "buffered")
         if warn:
-            self.send_header("X-Gateway-Warning", warn)
+            self.send_header("X-Gateway-Warning", _safe_header(warn))
         self.send_header("Transfer-Encoding", "chunked")
         self.end_headers()
 
@@ -1443,7 +1547,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def handle_nonstream(self, payload: dict, strategy: str) -> None:
         tried, last = [], None
-        for p in candidates(strategy):
+        for p in candidates(strategy, getattr(self, "want_model", "")):
             tried.append(p["name"])
             t0 = time.time()
             try:
@@ -1457,11 +1561,14 @@ class Handler(BaseHTTPRequestHandler):
                 mark_ok(p)
                 extra = {"X-Gateway-Provider": p["name"]}
                 if warn:
-                    extra["X-Gateway-Warning"] = warn
+                    # 头里只放 ASCII 短码；中文详情已经写进 usage 账本
+                    extra["X-Gateway-Warning"] = "model-mismatch"
                 self.send_json(200, data, extra)
                 return
             except Exception as exc:               # noqa: BLE001
                 msg = err_text(exc)
+                if os.getenv("DSGW_DEBUG"):
+                    print(f"[dbg] FAIL {p['name']}: {msg[:200]}", flush=True)
                 mark_fail(p, ProviderError(msg))
                 record(p["name"], p["model"], 0, 0, 0.0, False,
                        int((time.time() - t0) * 1000), msg)
@@ -1472,7 +1579,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def handle_stream(self, payload: dict, strategy: str) -> None:
         tried, last = [], None
-        for p in candidates(strategy):
+        for p in candidates(strategy, getattr(self, "want_model", "")):
             tried.append(p["name"])
             t0 = time.time()
 
@@ -1812,14 +1919,14 @@ async function load(){
         + '<td><b>' + p.name + '</b>' + typeTag
         + '<div class="sub">' + esc(p.note||'') + '</div></td>'
         + '<td><span class="tag ' + cls + '">' + st + '</span></td>'
-        + '<td class="mono">' + esc(p.model) + '</td>'
+        + '<td class="mono clip" title="' + esc(p.model) + '">' + esc(p.model) + '</td>'
         + '<td>' + p.quant + '</td>'
-        + '<td>' + quota + '</td>'
-        + '<td class="mono">' + p.price_in.toFixed(3) + ' / ' + p.price_out.toFixed(3) + '</td>'
-        + '<td>' + p.requests_24h + '</td>'
-        + '<td>' + (p.tokens_in_24h+p.tokens_out_24h).toLocaleString() + '</td>'
-        + '<td class="mono">$' + p.cost_24h.toFixed(4) + '</td>'
-        + '<td>' + btn + ' <button onclick="probe(\\'' + p.name + '\\')">自检</button></td>'
+        + '<td class="nowrap">' + quota + '</td>'
+        + '<td class="mono nowrap">' + p.price_in.toFixed(3) + ' / ' + p.price_out.toFixed(3) + '</td>'
+        + '<td class="nowrap">' + p.requests_24h + '</td>'
+        + '<td class="nowrap">' + (p.tokens_in_24h+p.tokens_out_24h).toLocaleString() + '</td>'
+        + '<td class="mono nowrap">$' + p.cost_24h.toFixed(4) + '</td>'
+        + '<td class="nowrap">' + btn + ' <button onclick="probe(\\'' + p.name + '\\')">自检</button></td>'
         + '<td><span class="err" title="' + esc(p.last_error) + '">'
         + (esc(p.last_error) || '-') + '</span></td>'
         + '</tr>';
@@ -2027,12 +2134,19 @@ function provCard(p, i){
     + '<div class="hint">OpenAI 兼容根地址，结尾不要带斜杠。</div></div>'
 
     + '<div class="f2">'
-    + '<div class="field"><label>模型名</label>'
-    + '<input data-f="model" value="' + esc(p.model) + '"></div>'
+    + '<div class="field"><label>默认模型</label>'
+    + '<input data-f="model" value="' + esc(p.model) + '">'
+    + '<div class="hint">客户端不点名时用这个。</div></div>'
     + '<div class="field"><label>优先级</label>'
     + '<input type="number" data-f="priority" value="' + (p.priority || 100) + '">'
     + '<div class="hint">越小越先试</div></div>'
     + '</div>'
+
+    + '<div class="field"><label>更多模型（可选）</label>'
+    + '<input data-f="models" value="' + esc((p.models || []).join(', ')) + '"'
+    + ' placeholder="逗号分隔，客户端可以直接点名这些模型">'
+    + '<div class="hint"><button type="button" onclick="discover(' + i + ')">'
+    + '探测这个上游有哪些模型</button> <span id="dsc_' + i + '"></span></div></div>'
 
     + '<div class="f2">'
     + '<div class="field"><label>类型</label><select data-f="type">'
@@ -2127,6 +2241,10 @@ function collect(){
     el.querySelectorAll('[data-f]').forEach(inp => {
       const f = inp.dataset.f;
       if(inp.type === 'checkbox') o[f] = inp.checked;
+      else if(f === 'models'){
+        o[f] = String(inp.value || '').split(',').map(function(x){ return x.trim(); })
+                 .filter(function(x){ return x; });
+      }
       else if(inp.type === 'number') o[f] = inp.value === '' ? 0 : Number(inp.value);
       else o[f] = inp.value;
     });
@@ -2230,6 +2348,40 @@ function delProv(i){
   CFG.providers.splice(i, 1);
   render();
   msg('已从列表移除，点「保存全部」才会真正写盘');
+}
+
+const MODEL_CACHE = {};
+
+async function discover(idx){
+  const p = CFG.providers[idx];
+  if(!p) return;
+  const el = document.getElementById('dsc_' + idx);
+  if(!el) return;
+  el.textContent = '探测中…';
+  try{
+    const d = await api('/admin/api/discover', {method:'POST',
+      body: JSON.stringify({name: p.name})});
+    if(!d.ok){ el.textContent = '失败：' + (d.error || ''); return; }
+    const free = (d.models || []).filter(function(m){ return m.free; })
+                                .map(function(m){ return m.id; });
+    MODEL_CACHE[idx] = free;
+    if(free.length){
+      el.innerHTML = '共 ' + d.count + ' 个，免费 ' + free.length + ' 个 '
+        + '<button type="button" onclick="fillFree(' + idx + ')">填入这些免费模型</button>';
+    } else {
+      el.textContent = '共 ' + d.count + ' 个模型，没识别出免费的';
+    }
+  }catch(e){ el.textContent = '失败：' + e.message; }
+}
+
+function fillFree(idx){
+  const list = MODEL_CACHE[idx] || [];
+  if(!list.length){ msg('没有探测到免费模型'); return; }
+  const card = document.querySelector('.provcard[data-i="' + idx + '"]');
+  const inp = card ? card.querySelector('[data-f="models"]') : null;
+  if(!inp){ msg('找不到模型输入框'); return; }
+  inp.value = list.join(', ');
+  msg('已填入 ' + list.length + ' 个免费模型，记得点「保存全部」');
 }
 
 async function probeOne(name){
