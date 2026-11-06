@@ -909,8 +909,9 @@ function renderLog() {
   if (f === 'ok') rows = rows.filter(r => r.ok);
   if (f === 'fail') rows = rows.filter(r => !r.ok);
   if (q) {
-    rows = rows.filter(r => (r.client_ip + ' ' + r.user_agent + ' ' + r.model
-      + ' ' + r.request_id + ' ' + r.provider + ' ' + r.token).toLowerCase().indexOf(q) >= 0);
+    rows = rows.filter(r => (r.client_ip + ' ' + r.user_agent + ' ' + r.model + ' '
+      + (r.upstream_model || '') + ' ' + r.request_id + ' ' + r.provider + ' '
+      + r.token).toLowerCase().indexOf(q) >= 0);
   }
 
   // 顶部汇总
@@ -937,14 +938,23 @@ function renderLog() {
     const speed = r.tps ? r.tps + ' t/s' : '-';
     const ua = r.user_agent ? (r.user_agent.length > 26
       ? r.user_agent.slice(0, 26) + '…' : r.user_agent) : '-';
+    const up = r.upstream_model || '';
+    const differs = up && up !== r.model;
+    const upCell = up
+      ? (differs
+        ? '<span class="tag y" title="网关把客户端点名的模型改写成了这个">改写</span> '
+          + '<span class="mono" style="color:var(--warn)">' + esc(up) + '</span>'
+        : '<span class="mono sub">' + esc(up) + '</span>')
+      : '<span class="sub">-</span>';
     return '<tr>'
       + '<td class="nowrap mono">' + r.time + '</td>'
       + '<td><span class="tag ' + cls + '">' + r.status + ' '
       + (r.ok ? '成功' : '失败') + '</span>'
       + (r.err ? ' <span class="err" title="' + esc(r.err) + '">!</span>' : '') + '</td>'
       + '<td class="mono clip" title="' + esc(r.model) + '">' + esc(r.model) + '</td>'
+      + '<td class="clip" title="' + esc(up || '（没记录到）') + '">' + upCell + '</td>'
       + '<td class="sub clip">' + esc(r.token) + '</td>'
-      + '<td class="sub nowrap">' + eff + '</td>'
+      + '<td class="sub nowrap">' + (eff || '<span class="sub">-</span>') + '</td>'
       + '<td class="nowrap">' + (r.stream ? 'SSE' : 'JSON')
       + '<div class="sub">' + esc(r.provider) + '</div></td>'
       + '<td class="nowrap">' + (r.first_byte_ms ? (r.first_byte_ms / 1000).toFixed(1) + 's' : '-') + '</td>'
