@@ -1006,6 +1006,33 @@ def main() -> int:
         check(d10.get("ok") is False, "卡死被如实报告", err10[:100])
         check("免费额度已用尽" in err10, "把服务端原因带出来了", err10[:160])
 
+        print("== 30. opencode CLI 模式（opencode run）==")
+        if os.name == "nt":
+            print("  跳过：Windows 下不能直接执行 shell 脚本（CI 的 Linux 会跑）")
+        else:
+            fake = os.path.join(tmp, "fake-opencode")
+            with open(fake, "w", encoding="utf-8") as fh:
+                fh.write("#!/bin/sh" + chr(10) + 'echo "CLI-PONG $*"' + chr(10))
+            os.chmod(fake, 0o755)
+            with open(os.path.join(pd, "oc-cli.json"), "w", encoding="utf-8") as fh:
+                json.dump({"providers": [{
+                    "name": "oc-cli", "type": "opencode", "opencode_mode": "cli",
+                    "enabled": False, "priority": 96,
+                    "base_url": f"http://127.0.0.1:{OC_PORT}",
+                    "model": "deepseek-v4.1-flash-free", "timeout": 20,
+                    "free_only": True, "free_quota_tokens": 0,
+                    "price_in": 0, "price_out": 0,
+                }]}, fh, ensure_ascii=False)
+            code, _, txt = http("GET", base + "/admin/api/config")
+            cur = json.loads(txt)
+            cur["opencode_bin"] = fake
+            http("POST", base + "/admin/api/config", cur)
+            http("POST", base + "/admin/api/reload", {})
+            code, _, txt = http("POST", base + "/admin/api/probe", {"name": "oc-cli"})
+            d11 = json.loads(txt) if code == 200 else {}
+            check(d11.get("ok") is True and "CLI-PONG" in str(d11.get("sample")),
+                  "cli 模式跑通并回传输出", str(d11.get("sample"))[:100])
+
     finally:
         proc.terminate()
         try:
