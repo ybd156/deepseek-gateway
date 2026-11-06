@@ -174,6 +174,64 @@ class OpenCodeSupervisor:
                 out.append(u)
         return out
 
+    def login_state(self) -> dict:
+        """把 PTY 的原始输出翻译成「第几步、该做什么」。"""
+        raw = ""
+        try:
+            raw = open(self.login_log_path(), "rb").read().decode("utf-8", "ignore")
+        except Exception:
+            pass
+        text = self._clean_pty(raw)
+        low = text.lower()
+        urls = self._find_urls(text)
+        st = {"state": "idle", "title": "还没开始登录",
+              "hint": "点下面的「登录 OpenCode」开始，全程三步。",
+              "actions": [], "url": "", "raw": text[-3000:]}
+        if not text.strip():
+            return st
+
+        if "select integration" in low or "connect an integration" in low:
+            st.update(state="pick_integration",
+                      title="第 1 步 · 选择登录到哪个服务",
+                      hint="免费模型和按量付费模型都在「OpenCode Console」里，选它。",
+                      actions=[{"id": "pick-console", "label": "选 OpenCode Console"},
+                               {"id": "pick-go", "label": "选 OpenCode Go（订阅制）"}])
+            return st
+
+        if ("select method" in low or "select a method" in low
+                or "authentication method" in low or "login method" in low):
+            st.update(state="pick_method",
+                      title="第 2 步 · 选择登录方式",
+                      hint="选带浏览器 / OAuth 的那一项（一般第一项就是）。",
+                      actions=[{"id": "enter", "label": "选第一项（回车）"}])
+            return st
+
+        if urls:
+            st.update(state="authorize",
+                      title="第 3 步 · 在浏览器里点同意",
+                      hint="复制这个链接，在电脑或手机上打开并授权，然后回来看结果。",
+                      url=urls[0],
+                      actions=[{"id": "login-log", "label": "我已授权，刷新结果"}])
+            return st
+
+        for kw in ("logged in", "login successful", "connected", "authenticated",
+                   "account added", "success"):
+            if kw in low:
+                st.update(state="done", title="登录成功",
+                          hint="回去点「试一句」验证，通了就把上游启用。")
+                return st
+
+        for kw in ("error", "failed", "invalid", "denied", "expired"):
+            if kw in low:
+                st.update(state="error", title="登录失败",
+                          hint="展开下面的原始输出看看原因，或者重新点「登录 OpenCode」。")
+                return st
+
+        st.update(state="waiting", title="等待你的操作…",
+                  hint="如果画面一直不动，点一下「发送回车」试试。",
+                  actions=[{"id": "enter", "label": "发送回车"}])
+        return st
+
     def login_urls(self) -> list:
         try:
             raw = open(self.login_log_path(), "rb").read().decode("utf-8", "ignore")
@@ -373,6 +431,7 @@ class OpenCodeSupervisor:
             "oc_logs": self.own_logs(120),
             "login_log": self.login_log(60),
             "login_urls": self.login_urls(),
+            "login_state": self.login_state(),
             "uptime": int(time.time() - self.started_at) if self.is_running() else 0,
             "restarts": self.restarts,
             "last_error": self.last_error,
