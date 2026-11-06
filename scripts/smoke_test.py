@@ -757,6 +757,18 @@ def main() -> int:
         check(d5.get("ok") is False and "可用列表" in err,
               "模型不存在时给出可用列表", err[:100])
 
+        print("== 20. CORS 与 /v1/models（浏览器类客户端要用）==")
+        code, hdrs, txt = http("GET", base + "/v1/models",
+                               headers={"Authorization": "Bearer " + key1})
+        check(code == 200, "带令牌能列模型", str(code))
+        check(hdrs.get("Access-Control-Allow-Origin") == "*",
+              "返回 CORS 头", str(hdrs.get("Access-Control-Allow-Origin")))
+        ids = [m["id"] for m in json.loads(txt).get("data", [])]
+        check(len(ids) > 0, "模型列表非空", str(ids[:3]))
+
+        code, _, _ = http("OPTIONS", base + "/v1/chat/completions")
+        check(code == 204, "OPTIONS 预检返回 204", str(code))
+
     finally:
         proc.terminate()
         try:
