@@ -337,7 +337,12 @@ function provCard(p, i) {
     + '<input data-f="models" value="' + esc((p.models || []).join(', ')) + '"'
     + ' placeholder="逗号分隔，客户端可以直接点名">'
     + '<div class="hint"><button type="button" onclick="discover(' + i + ')">'
-    + '探测这个上游有哪些模型</button> <span id="dsc_' + i + '"></span></div></div>';
+    + '探测这个上游有哪些模型</button> <span id="dsc_' + i + '"></span></div>'
+    + '<label class="chk" style="margin-top:8px">'
+    + '<input type="checkbox" data-f="model_passthrough"'
+    + (p.model_passthrough ? ' checked' : '') + '> 允许任意模型名（透传，不校验）</label>'
+    + '<div class="hint">不勾时：客户端点了列表里没有的模型，网关会直接报错，'
+    + '不会偷偷换成默认模型。</div></div>';
 
   h += '<div class="f2"><div class="field"><label>类型</label>'
     + '<select data-f="type" onchange="switchType(this)">'
