@@ -2846,15 +2846,17 @@ NAV
         </div>
         <div class="sub" style="margin:10px 0 4px">启动输出</div>
         <pre id="ocLog">（暂无日志）</pre>
-        <div class="sub" style="margin:10px 0 4px">登录输出（auth login 的链接/验证码在这）</div>
-        <div class="inline" style="margin:0 0 6px">
-          <input id="ocKeys" placeholder="看到菜单时：直接点「发送回车」选第一项；也可填数字">
-          <button onclick="ocSendKeys()">发送</button>
-          <button class="pri" onclick="ocSendKeys('enter')">发送回车</button>
-          <button onclick="ocSendKeys('pick-console')">选 OpenCode Console</button>
-          <button onclick="ocSendKeys('pick-go')">选 OpenCode Go</button>
-        </div>
-        <pre id="ocLogin">（还没有登录输出）</pre>
+        <div class="sub" style="margin:12px 0 6px">登录向导</div>
+        <div id="ocGuide"></div>
+        <details style="margin:8px 0 0">
+          <summary class="sub" style="cursor:pointer">高级：手动发送按键 / 原始输出</summary>
+          <div class="inline" style="margin:8px 0 6px">
+            <input id="ocKeys" placeholder="一般不用手填，向导里的按钮就够了">
+            <button onclick="ocSendKeys()">发送</button>
+            <button onclick="ocSendKeys('enter')">发送回车</button>
+          </div>
+          <pre id="ocLogin">（还没有登录输出）</pre>
+        </details>
         <div class="sub" style="margin:10px 0 4px">opencode 自己的日志（provider 报错在这）</div>
         <pre id="ocOwnLog">（暂无）</pre>
       </div>
@@ -3323,6 +3325,31 @@ function ocPaint(d){
     (d.last_error ? ('[错误] ' + d.last_error + ' | ') : '') + (d.log || '（暂无日志）');
   const ol = document.getElementById('ocOwnLog');
   if(ol) ol.textContent = d.oc_logs || '（暂无）';
+  const gd = document.getElementById('ocGuide');
+  const ls = d.login_state || null;
+  if(gd && ls){
+    let h = '<div class="card" style="padding:14px">';
+    h += '<div style="font-weight:700;font-size:15px">' + esc(ls.title || '') + '</div>';
+    h += '<div class="sub" style="margin:6px 0 0">' + esc(ls.hint || '') + '</div>';
+    if(ls.url){
+      h += '<div class="inline" style="margin-top:10px">'
+         + '<input id="ocUrl" readonly value="' + esc(ls.url) + '">'
+         + '<button class="pri" data-copy="ocUrl" data-label="授权链接" '
+         + 'onclick="copyEp(this.dataset.copy, this.dataset.label)">复制链接</button></div>';
+    }
+    const acts = ls.actions || [];
+    if(acts.length){
+      h += '<div style="margin-top:10px">';
+      acts.forEach(function(a){
+        h += '<button class="pri" data-k="' + esc(a.id) + '" '
+           + 'onclick="ocSendKeys(this.dataset.k)" style="margin:0 8px 8px 0">'
+           + esc(a.label) + '</button>';
+      });
+      h += '</div>';
+    }
+    h += '</div>';
+    gd.innerHTML = h;
+  }
   const lg = document.getElementById('ocLogin');
   if(lg){
     const urls = d.login_urls || [];
