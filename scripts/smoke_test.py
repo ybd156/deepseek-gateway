@@ -844,6 +844,29 @@ def main() -> int:
         v3 = json.loads(txt) if code == 200 else {}
         check(v3.get("ok") is False, "无效 Key 如实报告", str(v3.get("error"))[:60])
 
+        print("== 23. 单张上游保存 ==")
+        code, _, txt = http("GET", base + "/admin/api/config")
+        cfg5 = json.loads(txt)
+        target = next(p for p in cfg5["providers"] if p["name"] == "good")
+        other_before = next((p for p in cfg5["providers"] if p["name"] == "local-noauth"), {})
+        target["note"] = "单独保存的备注"
+        code, _, txt = http("POST", base + "/admin/api/save-provider", {"provider": target})
+        d7 = json.loads(txt) if code == 200 else {}
+        check(code == 200 and d7.get("ok"), "单张保存成功", txt[:100])
+        after = {p["name"]: p for p in d7.get("providers", [])}
+        check(after.get("good", {}).get("note") == "单独保存的备注",
+              "目标已更新", str(after.get("good", {}).get("note")))
+        check(after.get("local-noauth", {}).get("note") == other_before.get("note"),
+              "其它上游未受影响", str(after.get("local-noauth", {}).get("note")))
+
+        code, _, txt = http("POST", base + "/admin/api/save-provider",
+                            {"provider": {"name": "brand-new",
+                                          "base_url": "http://127.0.0.1:1/v1",
+                                          "model": "m"}})
+        d8 = json.loads(txt) if code == 200 else {}
+        check(any(p["name"] == "brand-new" for p in d8.get("providers", [])),
+              "新名字会自动追加", str([p["name"] for p in d8.get("providers", [])][-3:]))
+
     finally:
         proc.terminate()
         try:
