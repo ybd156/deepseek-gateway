@@ -384,6 +384,22 @@ def config_save(body: dict) -> dict:
     return snap
 
 
+def quick_port_check(url: str, timeout: float = 0.6) -> bool:
+    """秒级探测某个地址的端口通不通（不启动任何东西）。"""
+    try:
+        u = urlparse(url if "://" in url else "http://" + url)
+        host = u.hostname or "127.0.0.1"
+        port = u.port or (443 if u.scheme == "https" else 80)
+        sk = socket.socket()
+        sk.settimeout(timeout)
+        try:
+            return sk.connect_ex((host, port)) == 0
+        finally:
+            sk.close()
+    except Exception:
+        return False
+
+
 def test_proxy(proxy_url: str, target: str = "https://api.deepseek.com/") -> dict:
     """真连一次：走该代理请求一个地址，返回耗时与状态。"""
     opener = build_opener(proxy_url, 8)
@@ -1000,9 +1016,16 @@ class Handler(BaseHTTPRequestHandler):
         if p is None:
             self.send_json(404, {"ok": False, "error": "unknown provider"})
             return
-        if not p["api_key"] and p["type"] != "opencode":
+        if not p["api_key"] and p["type"] != "opencode" and not p["no_auth"]:
             self.send_json(200, {"ok": False, "provider": name,
-                                 "error": "没有密钥，先在上游配置里填 api_key_env"})
+                                 "error": "没有密钥：在设置页这张卡片的「Key」里填一个"})
+            return
+        if p["type"] == "opencode" and not quick_port_check(p["base_url"]):
+            self.send_json(200, {
+                "ok": False, "provider": name, "ms": 0,
+                "error": ("连不上 opencode server（%s）：它没在运行。"
+                          "去设置页「OpenCode 运行时」点「启动」；没装过就先点「一键安装」。"
+                          "不想用就把这张卡片停用。" % p["base_url"])})
             return
 
         payload = {"messages": [{"role": "user", "content": "回复 OK 两个字，不要做其他操作"}]}
@@ -1683,12 +1706,19 @@ async function tog(name, enabled){
   load();
 }
 async function probe(name){
-  msg('正在自检 ' + name + ' …');
+  msg('正在自检 ' + name + ' …（最多等 60 秒）');
+  const t0 = Date.now();
   try{
-    const d = await api('/admin/api/probe', {method:'POST', body: JSON.stringify({name})});
-    if(d.ok){ msg('[通] ' + name + '  ' + d.ms + 'ms  ' + (d.sample || '').slice(0, 80)); }
-    else { msg('[失败] ' + name + '  ' + (d.ms || 0) + 'ms  ' + (d.error || '')); }
-  }catch(e){ msg('自检失败：' + e.message); }
+    const d = await Promise.race([
+      api('/admin/api/probe', {method:'POST', body: JSON.stringify({name})}),
+      new Promise(function(_, rej){
+        setTimeout(function(){ rej(new Error('超时（60 秒没返回）')); }, 60000);
+      })
+    ]);
+    const sec = ((Date.now() - t0) / 1000).toFixed(1);
+    if(d.ok){ msg('[通] ' + name + '  ' + sec + 's  ' + (d.sample || '').slice(0, 80)); }
+    else { msg('[失败] ' + name + '  ' + sec + 's  ' + (d.error || '')); }
+  }catch(e){ msg('[失败] ' + name + '  ' + e.message); }
   load();
 }
 async function reloadCfg(){
@@ -1800,9 +1830,38 @@ let CFG = null;
 
 function fld(label, inner){ return `<div class="fld"><label>${label}</label>${inner}</div>`; }
 
+const CONSOLE_MAP = [
+  ['openrouter.ai', 'https://openrouter.ai/keys'],
+  ['api.deepseek.com', 'https://platform.deepseek.com/api_keys'],
+  ['ark.cn-beijing.volces.com', 'https://console.volcengine.com/ark'],
+  ['api.siliconflow.cn', 'https://cloud.siliconflow.cn/account/ak'],
+  ['tokenhub.tencentmaas.com', 'https://console.cloud.tencent.com/tokenhub'],
+  ['qianfan.baidubce.com', 'https://console.bce.baidu.com/qianfan/'],
+  ['nvidia.com', 'https://build.nvidia.com/settings/api-keys'],
+  ['modelarts-maas.com', 'https://console.huaweicloud.com/modelarts/'],
+  ['11434', 'https://ollama.com/library'],
+  ['4096', 'https://opencode.ai/docs/zen']
+];
+
+function guessConsole(p){
+  if(p.console_url) return p.console_url;
+  const u = String(p.base_url || '');
+  for(let k = 0; k < CONSOLE_MAP.length; k++){
+    if(u.indexOf(CONSOLE_MAP[k][0]) >= 0) return CONSOLE_MAP[k][1];
+  }
+  return '';
+}
+
+function openConsole(el){
+  const u = el.dataset.url || '';
+  if(!u){ msg('这个上游没有可识别的控制台地址，手动填一个再点打开'); return; }
+  window.open(u, '_blank', 'noopener');
+}
+
 function provCard(p, i){
-  const link = p.console_url
-    ? `<a href="${esc(p.console_url)}" target="_blank" rel="noopener">去获取 Key ↗</a>` : '';
+  const cUrl = guessConsole(p);
+  const link = cUrl
+    ? `<a href="${esc(cUrl)}" target="_blank" rel="noopener">去获取 Key ↗</a>` : '';
   return `<div class="prov provcard" data-i="${i}">
     <div class="hd"><input data-f="name" value="${esc(p.name)}" style="font-weight:600;flex:1">
       <span>${link}</span></div>
@@ -1825,7 +1884,7 @@ function provCard(p, i){
     ${fld('Key 变量', `<input data-f="api_key_env" value="${esc(p.api_key_env)}" placeholder="环境变量名">`)}
     ${fld('Key', `<input type="password" class="kval" data-env="${esc(p.api_key_env)}"
         placeholder="${esc(p._key_source||'无')}">`)}
-    ${fld('控制台', `<input data-f="console_url" value="${esc(p.console_url)}" placeholder="获取 Key 的页面">`)}
+    ${fld('控制台', `<input data-f="console_url" value="${esc(p.console_url)}" placeholder="${esc(cUrl || '留空则按接口自动识别')}"><button type="button" data-url="${esc(cUrl)}" onclick="openConsole(this)">打开</button>`)}
     ${fld('备注', `<input data-f="note" value="${esc(p.note)}">`)}
     <div class="fld"><label></label>
       <button onclick="probeOne('${esc(p.name)}')">自检</button>
