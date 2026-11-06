@@ -49,6 +49,26 @@
 | API Key | 主口令，或「访问令牌」里建的 `sk-fnos-*` |
 | 模型 | 面板「概览 → 接入地址」里列出的任意一个 |
 
+### 客户端会看到哪些模型
+
+`GET /v1/models` **只返回现在真能调用的**：上游已启用、有密钥、免费额度没用尽。
+停用或缺密钥的上游，它的模型不会出现在客户端里，免得你点了一堆都 502。
+
+每条都带能力信息，客户端可以直接用：
+
+```json
+{
+  "id": "opencode/deepseek-v4.1-flash-free",
+  "object": "model",
+  "owned_by": "opencode-free",
+  "context_length": 128000,
+  "capabilities": { "vision": false, "reasoning": ["off","low","medium","high"] }
+}
+```
+
+- `GET /v1/models/{id}` — 查单个
+- `GET /v1/models?all=1` — 管理员用，连不可用的也列，并给出 `unavailable_reason`
+
 > ⚠️ **外部客户端一律用直连地址**。桌面图标走的是飞牛统一网关
 > `/app/ai-gateway/v1`，那条路要 NAS 登录 Cookie，只有在本机浏览器里有效。
 > 接口已带 CORS 头与 OPTIONS 预检，Open WebUI / LobeChat 这类浏览器端也能直连。
