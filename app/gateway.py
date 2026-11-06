@@ -42,6 +42,7 @@ SECRETS_PATH = os.path.join(DATA_DIR, "secrets.json")
 TOKENS_PATH = os.path.join(DATA_DIR, "tokens.json")
 OVERRIDES_PATH = os.path.join(DATA_DIR, "toggles.json")
 DB_PATH = os.path.join(DATA_DIR, "usage.db")
+CAPS_PATH = os.path.join(DATA_DIR, "caps_cache.json")
 
 HOST = os.getenv("HOST", "0.0.0.0")
 PORT = int(os.getenv("PORT", "18787"))
@@ -415,6 +416,99 @@ def init_db() -> None:
     conn.close()
 
 
+# 从上游 /models 探测到的能力：{模型名小写: {context,max_output,vision,provider,at}}
+CAPS_CACHE: dict = {}
+CAPS_LOCK = threading.Lock()
+CAPS_TTL = 12 * 3600
+
+
+def load_caps_cache() -> None:
+    global CAPS_CACHE
+    data = read_json(CAPS_PATH, {})
+    with CAPS_LOCK:
+        CAPS_CACHE = data if isinstance(data, dict) else {}
+
+
+def save_caps_cache() -> None:
+    with CAPS_LOCK:
+        snap = dict(CAPS_CACHE)
+    try:
+        atomic_write_json(CAPS_PATH, snap)
+    except Exception:
+        pass
+
+
+def upstream_caps(model: str) -> dict:
+    with CAPS_LOCK:
+        return dict(CAPS_CACHE.get(str(model or "").lower()) or {})
+
+
+def caps_of(model: str) -> dict:
+    """三层合并后的能力：手动 > 上游 > 内置。"""
+    override = (RUNTIME.get("model_caps") or {}).get(model) or {}
+    return policy.caps_for(model, override, upstream_caps(model))
+
+
+def probe_upstream_caps(p: dict) -> dict:
+    """问一个上游它有哪些模型、各自多大上下文。拿不到就返回空。"""
+    if p["type"] == "opencode":
+        return {}
+    url = p["base_url"] + "/models"
+    head = headers_for(p, False)
+    head.pop("Accept", None)
+    to = float(RUNTIME["timeout_short"])
+    try:
+        req = urllib.request.Request(url, headers=head, method="GET")
+        opener = build_opener(p.get("proxy") or RUNTIME.get("proxy") or "", to)
+        if opener is not None:
+            resp = opener.open(req, timeout=to)
+        else:
+            resp = urllib.request.urlopen(req, timeout=to)
+        try:
+            raw = resp.read()
+        finally:
+            resp.close()
+        data = json.loads(raw.decode("utf-8", "ignore"))
+    except Exception:
+        return {}
+    return policy.parse_upstream_models(data)
+
+
+def refresh_caps(only: str = "") -> dict:
+    """批量探测所有可用上游的能力，写进缓存。"""
+    got, failed = {}, []
+    targets = [p for p in PROVIDERS if p["enabled"]]
+    if only:
+        targets = [p for p in targets if p["name"] == only]
+    for p in targets:
+        if not (p["api_key"] or p["no_auth"] or p["type"] == "opencode"):
+            continue
+        caps = probe_upstream_caps(p)
+        if not caps:
+            failed.append(p["name"])
+            continue
+        # 只缓存本网关真在用的模型，别把上游几百个模型都塞进缓存
+        want = {m.lower() for m in declared_models(p)}
+        hit = 0
+        for mid, c in caps.items():
+            if mid.lower() not in want:
+                continue
+            item = dict(c)
+            item["provider"] = p["name"]
+            item["at"] = now()
+            got[mid.lower()] = item
+            hit += 1
+        if not hit:
+            failed.append(p["name"])
+    if got:
+        with CAPS_LOCK:
+            for k, v in got.items():
+                CAPS_CACHE[k] = v
+        save_caps_cache()
+    return {"ok": True, "updated": len(got), "failed": failed,
+            "cached": len(CAPS_CACHE)}
+
+
 _USAGE_CACHE: dict = {"ts": 0.0, "data": {}}
 _QUOTA_CACHE: dict = {"ts": 0.0, "data": {}}
 
@@ -675,7 +769,7 @@ def apply_request_policy(payload: dict) -> tuple:
         payload["messages"], RUNTIME["keep_rounds"])
 
     # 6) 上下文窗口：超了就丢最老的对话
-    caps = policy.caps_for(model, (RUNTIME["model_caps"] or {}).get(model))
+    caps = caps_of(model)
     payload["messages"], dropped = policy.fit_context(
         payload["messages"], caps.get("context") or 0)
 
@@ -1288,6 +1382,15 @@ class Handler(BaseHTTPRequestHandler):
             payload = models_payload(include_all=want_all and is_admin(self))
             self.send_json(200, payload)
             return
+        if path == "/v1/gateway":
+            ok, _tok, reason = auth_v1(self)
+            if not ok:
+                self.send_json(401, {"error": {"message": reason,
+                                               "type": "unauthorized"}})
+                return
+            self.send_json(200, gateway_info(),
+                           {"X-Gateway-Version": str(gateway_info().get("version") or "")})
+            return
         if path.startswith("/v1/models/"):
             ok, _tok, reason = auth_v1(self)
             if not ok:
@@ -1443,6 +1546,10 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path == "/admin/api/proxy-test":
             self.send_json(200, test_proxy(str(body.get("proxy") or "")))
+            return
+        if path == "/admin/api/refresh-caps":
+            only = str(body.get("name") or "")
+            self.send_json(200, refresh_caps(only))
             return
         if path == "/admin/api/set-settings":
             self._set_settings(body)
@@ -2437,7 +2544,7 @@ def caps_payload() -> dict:
             if not mid or mid in seen:
                 continue
             seen.add(mid)
-            caps = policy.caps_for(mid, override.get(mid))
+            caps = caps_of(mid)
             rows.append({
                 "model": mid,
                 "provider": p["name"],
@@ -2446,7 +2553,9 @@ def caps_payload() -> dict:
                 "vision": bool(caps.get("vision")),
                 "reasoning": list(caps.get("reasoning") or []),
                 "known": bool(caps.get("known")),
+                "source": caps.get("source") or "guess",
                 "override": override.get(mid) or {},
+                "upstream": upstream_caps(mid),
             })
     rows.sort(key=lambda r: (r["provider"], r["model"]))
     tiers = [r for r in rows if len(r["reasoning"]) > 1]
@@ -2574,7 +2683,6 @@ def models_payload(include_all: bool = False) -> dict:
     否则客户端里会冒出一堆点了就 502 的名字。
     include_all=True 时连不可用的也列，并标出原因（管理员排查用）。
     """
-    override = RUNTIME["model_caps"] or {}
     pool = PROVIDERS if include_all else usable_providers()
     seen, rows = set(), []
     for p in sorted(pool, key=lambda x: x["priority"]):
@@ -2583,7 +2691,7 @@ def models_payload(include_all: bool = False) -> dict:
             if key in seen:
                 continue
             seen.add(key)
-            caps = policy.caps_for(mid, override.get(mid))
+            caps = caps_of(mid)
             ctx = int(caps.get("context") or 0)
             maxout = int(caps.get("max_output") or 0)
             vision = bool(caps.get("vision"))
@@ -2613,6 +2721,8 @@ def models_payload(include_all: bool = False) -> dict:
                     "context": ctx,
                     "max_output": maxout,
                 },
+                # 这个值哪来的：manual 手填 / upstream 探测 / builtin 内置表 / guess 猜的
+                "capability_source": caps.get("source") or "guess",
                 # NewAPI / OneAPI 风格的聚合字段
                 "model_info": {
                     "context_size": ctx,
@@ -2634,6 +2744,70 @@ def models_payload(include_all: bool = False) -> dict:
                 item["unavailable_reason"] = "、".join(reasons)
             rows.append(item)
     return {"object": "list", "data": rows}
+
+
+def gateway_info() -> dict:
+    """网关自我介绍：下游拿这个就能知道它支持什么、限制是什么。"""
+    models = models_payload()["data"]
+    ctxs = [m["context_length"] for m in models if m.get("context_length")]
+    outs = [m["max_output_tokens"] for m in models if m.get("max_output_tokens")]
+    return {
+        "object": "gateway",
+        "name": "fnos-ai-gateway",
+        "version": SETTINGS.get("version") or "",
+        "protocol": "openai",
+        "endpoints": {
+            "chat": "/v1/chat/completions",
+            "models": "/v1/models",
+            "model": "/v1/models/{id}",
+            "gateway": "/v1/gateway",
+            "health": "/healthz",
+        },
+        "features": {
+            "stream": True,
+            "stream_passthrough": True,
+            "vision": any(m.get("supports_vision") for m in models),
+            "reasoning": any(m.get("supports_reasoning") for m in models),
+            "tool_calls": True,
+            "cors": True,
+            "sse_buffered_fallback": True,
+        },
+        "limits": {
+            "max_context": max(ctxs) if ctxs else 0,
+            "max_output": max(outs) if outs else 0,
+            "timeout_short": RUNTIME["timeout_short"],
+            "timeout_first_byte": RUNTIME["timeout_first_byte"],
+            "timeout_stream_idle": RUNTIME["timeout_stream_idle"],
+            "keep_rounds": RUNTIME["keep_rounds"],
+        },
+        "policy": {
+            "strategy": RUNTIME["strategy"],
+            "cooldown_seconds": RUNTIME["cooldown"],
+            "effort_default": RUNTIME["effort_default"],
+            "effort_mode": RUNTIME["effort_mode"],
+            "system_mode": RUNTIME["system_mode"],
+            "sanitize": bool(RUNTIME["sanitize"]),
+            "model_blacklist": RUNTIME["model_blacklist"],
+            "model_whitelist": RUNTIME["model_whitelist"],
+            "model_mapping": RUNTIME["model_mapping"],
+        },
+        "auth": {
+            "scheme": "bearer",
+            "master": bool(RUNTIME["gateway_token"]),
+            "tokens": len([t for t in load_tokens() if t.get("enabled", True)]),
+        },
+        "counts": {
+            "models": len(models),
+            "providers": len(PROVIDERS),
+            "providers_enabled": sum(1 for p in PROVIDERS if p["enabled"]),
+        },
+        "capability_sources": {
+            "manual": sum(1 for m in models if m.get("capability_source") == "manual"),
+            "upstream": sum(1 for m in models if m.get("capability_source") == "upstream"),
+            "builtin": sum(1 for m in models if m.get("capability_source") == "builtin"),
+            "guess": sum(1 for m in models if m.get("capability_source") == "guess"),
+        },
+    }
 
 
 def opencode_view() -> dict:
@@ -2739,9 +2913,22 @@ else:
     UnixHandler = None
 
 
+def _caps_bootstrap() -> None:
+    """启动后台补一次能力探测（缓存过期才探，别每次重启都打上游）。"""
+    try:
+        newest = max([float(v.get("at") or 0) for v in CAPS_CACHE.values()] or [0])
+        if now() - newest < CAPS_TTL:
+            return
+        res = refresh_caps()
+        print(f"[gateway] 能力探测：更新 {res['updated']} 个模型", flush=True)
+    except Exception as exc:                           # noqa: BLE001
+        print(f"[gateway] 能力探测失败（不影响使用）：{exc}", flush=True)
+
+
 def main() -> int:
     load_config()
     init_db()
+    load_caps_cache()
 
     srv = ThreadingHTTPServer((HOST, PORT), Handler)
     srv.daemon_threads = True
@@ -2769,6 +2956,7 @@ def main() -> int:
     signal.signal(signal.SIGINT, _shutdown)
 
     threading.Thread(target=SUPERVISOR.watch, daemon=True).start()
+    threading.Thread(target=_caps_bootstrap, daemon=True).start()
 
     live = sum(1 for p in PROVIDERS
                if p["enabled"] and (p["api_key"] or p["type"] == "opencode"))
