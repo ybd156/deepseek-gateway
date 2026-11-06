@@ -173,6 +173,21 @@ class OpenCodeSupervisor:
             extra.append(os.path.dirname(bin_path))
             env["PATH"] = ":".join(extra + [env.get("PATH", "")])
 
+            # opencode 会往 HOME 写配置和认证，指到应用数据目录（那里可写）
+            home = os.path.join(self.data_dir, "home")
+            for d in (home,
+                      os.path.join(home, ".config"),
+                      os.path.join(home, ".local", "share"),
+                      os.path.join(self.data_dir, "npm-cache")):
+                try:
+                    os.makedirs(d, exist_ok=True)
+                except Exception:
+                    pass
+            env["HOME"] = home
+            env["XDG_CONFIG_HOME"] = os.path.join(home, ".config")
+            env["XDG_DATA_HOME"] = os.path.join(home, ".local", "share")
+            env["XDG_CACHE_HOME"] = os.path.join(self.data_dir, "npm-cache")
+
             try:
                 self.proc = subprocess.Popen(
                     [bin_path, "serve", "--port", port, "--hostname", "127.0.0.1"],
