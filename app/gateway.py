@@ -1075,6 +1075,8 @@ class Handler(BaseHTTPRequestHandler):
             self.handle_proxy_test()
         elif path == "/admin/api/discover":
             self.handle_discover()
+        elif path == "/admin/api/verify-key":
+            self.handle_verify_key()
         elif path == "/admin/api/reload":
             if not authorized(self):
                 self.send_json(401, {"error": "unauthorized"})
@@ -1145,6 +1147,56 @@ class Handler(BaseHTTPRequestHandler):
                 "ms": int((time.time() - t0) * 1000),
                 "error": err_text(exc)[:300],
             })
+
+    def handle_verify_key(self) -> None:
+        """拿一把 Key 来验：是主口令？是哪个令牌？有没有被停用/超额？"""
+        if not authorized(self):
+            self.send_json(401, {"error": "unauthorized"})
+            return
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+            key = str(json.loads(self.rfile.read(length) or b"{}").get("key", "")).strip()
+        except Exception:
+            self.send_json(400, {"ok": False, "error": "bad request"})
+            return
+
+        if not key:
+            self.send_json(200, {"ok": False, "error": "没有输入 Key"})
+            return
+
+        master = RUNTIME["gateway_token"]
+        if master and key == master:
+            self.send_json(200, {"ok": True, "kind": "主口令",
+                                 "note": "这是你自己设的访问口令，可以直接用"})
+            return
+
+        tok = find_token(key)
+        if tok:
+            quota = int(tok.get("quota_tokens") or 0)
+            used = token_usage().get(str(tok.get("id", "")), 0)
+            if quota > 0 and used >= quota:
+                self.send_json(200, {"ok": False, "kind": "令牌",
+                                     "error": f"令牌「{tok.get('name','')}」额度已用尽（{used}/{quota}）"})
+                return
+            self.send_json(200, {"ok": True, "kind": "令牌",
+                                 "name": tok.get("name", ""),
+                                 "quota_tokens": quota, "used_tokens": used})
+            return
+
+        # 没匹配上：给出可能原因
+        tokens = load_tokens()
+        if not master and not [t for t in tokens if t.get("enabled", True)]:
+            self.send_json(200, {"ok": True, "kind": "全开放模式",
+                                 "note": "当前没有设口令、也没有启用的令牌，任何 Key 都能用"})
+            return
+        hint = "这把 Key 不认识。"
+        if "*" in key:
+            hint += "看起来像列表里的掩码（带 ****），点「复制」拿完整值。"
+        else:
+            disabled = [t.get("name") for t in tokens if not t.get("enabled", True)]
+            if disabled:
+                hint += f" 已停用的令牌：{', '.join(disabled)}。"
+        self.send_json(200, {"ok": False, "error": hint})
 
     def handle_discover(self) -> None:
         """探测某个上游有哪些模型。"""
@@ -2068,6 +2120,11 @@ NAV
     <h2>访问令牌（给别人用这个网关时）</h2>
     <div class="card">
       <div class="hint" id="tokHint" style="margin-bottom:10px">…</div>
+      <div class="inline" style="margin-bottom:8px">
+        <input id="verifyKey" placeholder="粘贴一把 Key 来验证（排查 401 用）">
+        <button onclick="verifyKey()">验证 Key</button>
+        <span class="msg" id="verifyMsg"></span>
+      </div>
       <div class="inline" style="margin-bottom:12px">
         <input id="newTokName" placeholder="备注名，如 小明的笔记本">
         <input id="newTokQuota" type="number" placeholder="额度 tokens（0 = 不限）" style="max-width:210px">
@@ -2469,7 +2526,8 @@ async function loadTokens(){
         + '<td>' + esc(t.name) + '</td>'
         + '<td class="mono"><span class="kv" data-id="' + esc(t.id) + '">'
         + esc(t.key_masked) + '</span> '
-        + '<button data-id="' + esc(t.id) + '" onclick="tokReveal(this)">显示</button></td>'
+        + '<button data-id="' + esc(t.id) + '" onclick="tokReveal(this)">显示</button> '
+        + '<button data-id="' + esc(t.id) + '" onclick="tokCopy(this)">复制</button></td>'
         + '<td class="mono">' + t.used_tokens.toLocaleString() + ' / ' + q + '</td>'
         + '<td><span class="tag ' + (t.enabled ? 'g' : 'd') + '">'
         + (t.enabled ? '启用' : '停用') + '</span></td>'
@@ -2481,6 +2539,34 @@ async function loadTokens(){
     document.getElementById('tokBody').innerHTML =
       rows || '<tr><td colspan="5" class="sub">还没有令牌</td></tr>';
   }catch(e){ if(e.message !== 'unauthorized') msg('读取令牌失败：' + e.message); }
+}
+
+async function verifyKey(){
+  const el = document.getElementById('verifyMsg');
+  const key = (document.getElementById('verifyKey').value || '').trim();
+  if(!key){ el.textContent = '先粘贴一把 Key'; return; }
+  try{
+    const d = await api('/admin/api/verify-key', {method:'POST',
+      body: JSON.stringify({key: key})});
+    if(d.ok){
+      el.textContent = '可用：' + d.kind
+        + (d.name ? ('「' + d.name + '」') : '')
+        + (d.quota_tokens ? ('（已用 ' + d.used_tokens + '/' + d.quota_tokens + '）') : '')
+        + (d.note ? ('　' + d.note) : '');
+    } else {
+      el.textContent = '不可用：' + (d.error || '');
+    }
+  }catch(e){ el.textContent = '验证失败：' + e.message; }
+}
+
+async function tokCopy(el){
+  const id = el.dataset.id;
+  try{
+    const d = await api('/admin/api/tokens', {method:'POST',
+      body: JSON.stringify({action:'reveal', id: id})});
+    if(d.ok){ copyText(d.key, '完整 Key'); }
+    else { msg('无法复制：' + (d.error || '')); }
+  }catch(e){ msg('复制失败：' + e.message); }
 }
 
 async function createTok(){
