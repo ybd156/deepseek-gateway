@@ -78,7 +78,7 @@ class OpenCodeClient:
                 raise OpenCodeError(
                     f"连不上 opencode server（{self.base}）——它没在运行。"
                     f"先在本机执行 `opencode serve --port 4096 --hostname 127.0.0.1`"
-                    f"（或 app/opencode-serve.sh），再点自检。"
+                    f"，再点自检。"
                     f"不想用就把这一行停用。") from None
             if "timed out" in text or "timeout" in text:
                 raise OpenCodeError(
