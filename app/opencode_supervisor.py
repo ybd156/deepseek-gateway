@@ -261,11 +261,13 @@ class OpenCodeSupervisor:
                     st.update(state="done", title="已连接 OpenCode Go（订阅制）",
                               hint="Go 是按订阅计费的。如果你没有订阅，请重新登录并选 "
                                    "「OpenCode Console」。先点下面验证一下。",
-                              actions=[{"id": "ping", "label": "试一句验证"}])
+                              actions=[{"id": "ping", "label": "试一句验证"},
+                                       {"id": "login", "label": "重新登录（改选 Console）"}])
                 elif "opencode console" in low:
                     st.update(state="done", title="已连接 OpenCode Console",
                               hint="点下面验证一下，通了就把上游启用。",
-                              actions=[{"id": "ping", "label": "试一句验证"}])
+                              actions=[{"id": "ping", "label": "试一句验证"},
+                                       {"id": "login", "label": "重新登录"}])
                 else:
                     st.update(state="done", title="登录成功",
                               hint="点下面验证一下，通了就把上游启用。",
@@ -373,16 +375,31 @@ class OpenCodeSupervisor:
                 os.close(master)
             except Exception:
                 pass
+            st = getattr(self, "_login", None) or {}
+            if st.get("fd") == master:
+                self._login = {}
 
     def send_login(self, text: str) -> tuple:
-        """往登录的 PTY 里写按键（回车用 \r）。"""
+        """往登录的 PTY 里写按键；如果进程已经结束就自动重开一次。"""
         st = getattr(self, "_login", None) or {}
         fd = st.get("fd")
-        if fd is None:
-            return False, "登录进程没在跑，先点「登录 OpenCode」"
+        proc = st.get("proc")
+        dead = (fd is None) or (proc is not None and proc.poll() is not None)
+        if dead:
+            ok, msg = self.start_login("")
+            if not ok:
+                return False, msg
+            time.sleep(1.8)
+            st = getattr(self, "_login", None) or {}
+            fd = st.get("fd")
+            if fd is None:
+                return False, "登录进程没起来，看下面的原始输出"
         try:
             os.write(fd, text.encode("utf-8"))
             return True, "已发送：" + repr(text)
+        except OSError as exc:
+            self._login = {}
+            return False, f"登录进程已结束（{exc}），已重置，请再点一次「登录 OpenCode」"
         except Exception as exc:                    # noqa: BLE001
             return False, f"发送失败：{exc}"
 
