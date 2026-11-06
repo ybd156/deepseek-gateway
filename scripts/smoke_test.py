@@ -1036,6 +1036,7 @@ def main() -> int:
         print("== 31. 登录输出清理与链接提取 ==")
         esc = chr(27)
         messy = ((esc + "[2m" + esc + "[36m|" + esc + "[39m" + chr(10)) * 3
+                 + "Connect an integration  Select integration" + chr(10)
                  + "Open https://opencode.ai/auth/device?code=ABCD-1234 to approve" + chr(10)
                  + esc + "[22m done" + chr(10))
         with open(os.path.join(data_dir, "opencode-login.log"), "w",
@@ -1048,6 +1049,13 @@ def main() -> int:
               "从 TUI 输出里提取出授权链接", str(urls)[:100])
         check(esc not in str(d12.get("login_log")), "日志里不再有 ANSI 转义",
               str(d12.get("login_log"))[:60])
+        ls = d12.get("login_state") or {}
+        check(ls.get("state") in ("pick_integration", "authorize"),
+              "向导识别出当前步骤", str(ls.get("state")))
+        scr = str(ls.get("screen") or "")
+        check("[3" not in scr and "[2" not in scr, "当前屏幕里没有转义残渣", scr[:80])
+        check(bool(ls.get("title")) and bool(ls.get("hint")), "向导有标题和说明",
+              str(ls.get("title")))
 
     finally:
         proc.terminate()
