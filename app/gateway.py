@@ -2765,11 +2765,15 @@ NAV
     <!-- ===== OpenCode ===== -->
     <div class="sect" data-sect="opencode">
       <h2>OpenCode 运行时（给 type=opencode 的上游用）</h2>
-      <div class="hint" style="margin:-2px 0 10px;line-height:1.7">
-        免费模型官方限定「<b>只在 OpenCode 客户端内使用</b>」，API/CLI 调用会被限流并返回
-        <span class="mono">Free usage limit reached</span>（见 issue #59387）。<br>
-        另外 <b>v1（0.x/1.x）已不支持免费模型</b>，要用免费模型必须装 v2（<span class="mono">opencode2</span>）。
-        长期稳定使用请配一个有 Key 的上游。
+      <div class="hint" style="margin:-2px 0 10px;line-height:1.8">
+        <b>免费模型只能在他的客户端里用。</b>官方文档原文：
+        <span class="mono">Free-tier chat models require OpenCode; use paid models or Go from other clients.</span>
+        所以无论走 serve 还是 run，都会被限流并返回
+        <span class="mono">Free usage limit reached</span>（issue #59387）。<br>
+        <b>要用 API 得用付费模型</b>：Console 充值后拿 API Key，配上「<b>opencode-zen</b>」那张卡片
+        （<span class="mono">https://opencode.ai/inference/openai/v1</span>）即可，价格便宜
+        （DeepSeek V4.1 Flash $0.30/$1.20 每百万 tokens）。<br>
+        另外 <b>v1（0.x/1.x）已不支持免费模型</b>，要用必须装 v2（<span class="mono">opencode2</span>）。
       </div>
       <div class="card">
         <div class="phd"><span class="nm">opencode serve</span>
