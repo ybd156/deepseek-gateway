@@ -418,7 +418,9 @@ class OpenCodeSupervisor:
             return False, f"发送失败：{exc}"
 
     def cli_context(self) -> tuple:
-        """给 `opencode run` 用的 (二进制, 工作目录, 环境变量)。"""
+        # 子进程用干净环境。网关自身的环境变量（PORT、代理、PYTHON* 等）
+        # 会被 opencode 误用 —— 实测会表现为连 opencode.ai 时 ECONNREFUSED，
+        # 而同样的命令在干净环境下手动跑完全正常。
         bin_path = self.resolve_bin()
         opts = self.get_opts() or {}
         ws = str(opts.get("workspace") or os.path.join(self.data_dir, "opencode-workspace"))
@@ -440,20 +442,23 @@ class OpenCodeSupervisor:
                               fh, ensure_ascii=False, indent=2)
             except Exception:
                 pass
-
-        env = dict(os.environ)
-        extra = []
+        path_parts = []
+        if bin_path:
+            path_parts.append(os.path.dirname(bin_path))
         node = self.which("node")
         if node:
-            extra.append(os.path.dirname(node))
-        extra.extend(self.EXTRA_BIN_DIRS)
-        if bin_path:
-            extra.append(os.path.dirname(bin_path))
-        env["PATH"] = ":".join(extra + [env.get("PATH", "")])
-        env["HOME"] = home
-        env["XDG_CONFIG_HOME"] = os.path.join(home, ".config")
-        env["XDG_DATA_HOME"] = os.path.join(home, ".local", "share")
-        env["XDG_CACHE_HOME"] = os.path.join(self.data_dir, "npm-cache")
+            path_parts.append(os.path.dirname(node))
+        path_parts.extend(self.EXTRA_BIN_DIRS)
+        env = {
+            "HOME": home,
+            "XDG_CONFIG_HOME": os.path.join(home, ".config"),
+            "XDG_DATA_HOME": os.path.join(home, ".local", "share"),
+            "XDG_CACHE_HOME": os.path.join(self.data_dir, "npm-cache"),
+            "PATH": ":".join(path_parts),
+            "TERM": "xterm-256color",
+            "LANG": "C.UTF-8",
+            "TMPDIR": "/tmp",
+        }
         return bin_path, ws, env
 
     def own_logs(self, lines: int = 150) -> str:
