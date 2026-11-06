@@ -94,7 +94,38 @@
 `max_output_tokens` / `max_tokens`、`supports_vision` / `capabilities.vision`、
 以及 NewAPI 风格的 `model_info`），客户端认哪个都能读到。
 
-数值来自内置能力表，可以在「模型」页逐条改。
+数值来自三层，越靠前越优先：
+
+| 来源 | 怎么来的 | 标签 |
+|---|---|---|
+| **手动** | 你在「模型」页填的 | `手动` |
+| **上游** | 网关问上游 `/models` 拿到的真实值，缓存 12 小时 | `上游` |
+| **内置** | 内置能力表按模型名推断 | `内置` |
+| **未知** | 都匹配不上，按 32K / 4K 保守处理 | `未知` |
+
+网关启动时会自动探测一次（缓存过期才探），也可以在「模型」页点「探测上游能力」手动触发。
+能识别的上游字段：`context_length` / `context_window` / `top_provider.max_completion_tokens` /
+`architecture.input_modalities`（OpenRouter 风格）、`model_info.context_size`（NewAPI 风格）等。
+
+## 网关自述（让下游知道网关）
+
+`GET /v1/gateway` 返回网关自己的能力和限制，客户端不用猜：
+
+```json
+{
+  "object": "gateway",
+  "name": "fnos-ai-gateway",
+  "features": { "stream": true, "stream_passthrough": true, "vision": true,
+                "reasoning": true, "tool_calls": true, "cors": true },
+  "limits": { "max_context": 1000000, "max_output": 128000,
+              "timeout_first_byte": 120, "timeout_stream_idle": 300 },
+  "policy": { "strategy": "priority", "effort_default": "max",
+              "system_mode": "passthrough", "sanitize": false },
+  "auth": { "scheme": "bearer", "master": true, "tokens": 2 },
+  "counts": { "models": 12, "providers": 5, "providers_enabled": 3 },
+  "capability_sources": { "manual": 0, "upstream": 9, "builtin": 3, "guess": 0 }
+}
+```
 
 - `GET /v1/models/{id}` — 查单个
 - `GET /v1/models?all=1` — 管理员用，连不可用的也列，并给出 `unavailable_reason`
