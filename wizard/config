@@ -8,7 +8,7 @@
       },
       {
         "type": "tips",
-        "helpText": "飞牛桌面 →「DeepSeek 网关」，或直接访问 http://<飞牛IP>:18787/admin"
+        "helpText": "飞牛桌面 →「AI 网关」，或直接访问 http://<飞牛IP>:18787/admin"
       },
       {
         "type": "tips",
