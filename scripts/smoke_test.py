@@ -482,6 +482,23 @@ def main() -> int:
                           {"strategy": "nope", "providers": cfg["providers"]})
         check(code == 400, "非法策略被拒绝", str(code))
 
+        print("== 13. OpenCode 运行时托管 ==")
+        code, _, txt = http("GET", base + "/admin/api/opencode")
+        ocst = json.loads(txt) if code == 200 else {}
+        check(code == 200, "读取运行时状态", str(code))
+        check("installed" in ocst and "running" in ocst and "port" in ocst,
+              "状态字段齐全", str(sorted(ocst))[:100])
+        check(ocst.get("running") is False, "当前未运行", str(ocst.get("running")))
+        code, _, _ = http("POST", base + "/admin/api/opencode", {"action": "bogus"})
+        check(code == 400, "非法 action 被拒绝", str(code))
+        code, _, txt = http("POST", base + "/admin/api/opencode", {"action": "start"})
+        d = json.loads(txt) if code == 200 else {}
+        if not d.get("installed"):
+            check(d.get("ok") is False and "opencode" in str(d.get("message", "")),
+                  "未安装时启动给出可操作提示", str(d.get("message"))[:80])
+        code, _, txt = http("POST", base + "/admin/api/opencode", {"action": "stop"})
+        check(code == 200 and json.loads(txt).get("ok") is True, "停止幂等", txt[:80])
+
     finally:
         proc.terminate()
         try:
