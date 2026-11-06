@@ -435,13 +435,46 @@ def quick_port_check(url: str, timeout: float = 0.6) -> bool:
         return False
 
 
+def opencode_cli_models() -> list:
+    """用 `opencode models` 列模型（不需要 serve 在跑）。"""
+    try:
+        bin_path, ws, env = SUPERVISOR.cli_context()
+    except Exception:
+        return []
+    if not bin_path:
+        return []
+    try:
+        r = subprocess.run([bin_path, "models"], capture_output=True,
+                           timeout=90, env=env, cwd=ws)
+    except Exception:
+        return []
+    out = r.stdout.decode("utf-8", "ignore") or r.stderr.decode("utf-8", "ignore")
+    ids = []
+    for ln in out.splitlines():
+        ln = ln.strip()
+        if not ln or " " in ln or ln.startswith(">") or "/" not in ln:
+            continue
+        ids.append(ln)
+    return ids
+
+
 def discover_models(p: dict) -> dict:
     """问上游「你有哪些模型」。http 走 GET /models，opencode 走 /config/providers。"""
     try:
         if p["type"] == "opencode":
-            client = OpenCodeClient(base_url=p["base_url"], model_id="",
-                                    provider_id=p["opencode_provider"], timeout=15)
-            ids = client.available_models()
+            ids = []
+            try:
+                client = OpenCodeClient(base_url=p["base_url"], model_id="",
+                                        provider_id=p["opencode_provider"], timeout=10)
+                ids = client.available_models()
+            except Exception:
+                ids = []
+            if not ids:                       # serve 没在跑时用命令行列
+                ids = opencode_cli_models()
+            # 只保留该上游真正能用的命名空间：
+            # opencode/* 免登录可用；opencode-go/* 需要 Go 订阅，混进来会误填
+            _want = (p.get("opencode_provider") or "opencode") + "/"
+            ids = [i for i in ids if i.startswith(_want)]
             return {"ok": True, "count": len(ids),
                     "models": [{"id": i, "free": "free" in i.lower()} for i in ids]}
 
