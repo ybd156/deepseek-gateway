@@ -3331,6 +3331,10 @@ function ocPaint(d){
     let h = '<div class="card" style="padding:14px">';
     h += '<div style="font-weight:700;font-size:15px">' + esc(ls.title || '') + '</div>';
     h += '<div class="sub" style="margin:6px 0 0">' + esc(ls.hint || '') + '</div>';
+    if(ocLastResult){
+      h += '<div class="hint" style="margin-top:10px;padding:8px 10px;'
+         + 'background:#f6f8fb;border-radius:8px">' + esc(ocLastResult) + '</div>';
+    }
     if(ls.screen){
       h += '<div class="mono" style="margin-top:8px;padding:8px 10px;background:#fafbfd;'
          + 'border:1px solid var(--line);border-radius:8px;font-size:11px;'
@@ -3348,7 +3352,7 @@ function ocPaint(d){
       h += '<div style="margin-top:10px">';
       acts.forEach(function(a){
         h += '<button class="pri" data-k="' + esc(a.id) + '" '
-           + 'onclick="ocSendKeys(this.dataset.k)" style="margin:0 8px 8px 0">'
+           + 'onclick="ocGuideAct(this.dataset.k)" style="margin:0 8px 8px 0">'
            + esc(a.label) + '</button>';
       });
       h += '</div>';
@@ -3372,13 +3376,23 @@ function ocPaint(d){
     + ' · opencode ' + (d.bin ? ((d.bin_version || '?') + '　' + d.bin) : '未安装');
 }
 
+let ocLastResult = "";
+
+function ocGuideAct(id){
+  const acts = ['ping', 'login-log', 'login', 'diagnose', 'start', 'stop',
+                'install', 'log'];
+  if(acts.indexOf(id) >= 0){ ocAction(id); }
+  else { ocSendKeys(id); }
+}
+
 async function ocSendKeys(fixed){
   const el = document.getElementById('ocKeys');
   const keys = (fixed !== undefined) ? fixed : (el ? el.value : '');
   try{
     const d = await api('/admin/api/opencode', {method:'POST',
       body: JSON.stringify({action: 'login-keys', keys: keys})});
-    msg((d.ok ? '[成功] ' : '[失败] ') + (d.message || ''));
+    ocLastResult = (d.ok ? '[成功] ' : '[失败] ') + (d.message || '');
+    msg(ocLastResult);
     ocPaint(d);
   }catch(e){ msg('发送失败：' + e.message); }
 }
