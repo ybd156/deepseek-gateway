@@ -207,6 +207,18 @@ def main() -> int:
         except Exception as exc:                       # noqa: BLE001
             check(False, "页面 JS 语法检查", str(exc))
 
+    print("== 7c. 设置页收集范围（防误收集非上游卡片）==")
+    try:
+        src = open("app/gateway.py", encoding="utf-8").read()
+        check("querySelectorAll('.provcard')" in src,
+              "上游卡片用专属类 .provcard 收集")
+        check("querySelectorAll('.prov')" not in src,
+              "没有用宽泛的 .prov 选择器（会把运行时/令牌卡片也算成上游）")
+        check("function save(){" in src and "有上游的「名称」是空的" in src,
+              "保存前有前端自检")
+    except Exception as exc:                           # noqa: BLE001
+        check(False, "收集范围检查", str(exc))
+
     print("== 8. 图标尺寸 ==")
     try:
         from PIL import Image
