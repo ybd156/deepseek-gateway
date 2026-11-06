@@ -132,6 +132,19 @@ class FakeOpenCode(BaseHTTPRequestHandler):
     def do_DELETE(self):
         self._json(200, {"ok": True})
 
+    def do_GET(self):
+        if self.path == "/global/health":
+            self._json(200, {"healthy": True, "version": "test-1.0"})
+        elif self.path == "/config/providers":
+            self._json(200, {"providers": [{
+                "id": "opencode",
+                "models": {"deepseek-v4.1-flash-free": {}, "other-model": {}},
+            }]})
+        elif self.path == "/agent":
+            self._json(200, [{"name": "build"}, {"name": "plan"}])
+        else:
+            self._json(404, {"error": "not found"})
+
 
 class FakeSocks5(socketserver.BaseRequestHandler):
     """极简 SOCKS5：无认证 + CONNECT，把流量转发到假上游。"""
@@ -709,6 +722,24 @@ def main() -> int:
         od = d4.get("on_disk") or {}
         check(od.get("proxy") == f"socks5://127.0.0.1:{SOCKS_PORT}",
               "磁盘确认代理已落盘", str(od))
+
+        print("== 18. OpenCode 诊断 ==")
+        # 把「运行时端口」指到假 server，诊断才是针对它
+        http("POST", base + "/admin/api/set-settings", {"opencode_port": OC_PORT})
+        code, _, txt = http("POST", base + "/admin/api/opencode", {"action": "diagnose"})
+        dg = json.loads(txt) if code == 200 else {}
+        diag = dg.get("diag") or {}
+        steps = {x.get("step"): x for x in diag.get("steps", [])}
+        check(code == 200 and diag, "诊断返回结果", str(code))
+        check(steps.get("health", {}).get("ok") is True, "health 通",
+              str(steps.get("health", {}).get("error"))[:60])
+        check(steps.get("providers", {}).get("ok") is True, "能列出 providers",
+              str(steps.get("providers", {}).get("error"))[:60])
+        provs = (steps.get("providers", {}).get("data") or [])
+        found = any(p.get("deepseek") for p in provs if isinstance(p, dict))
+        check(found, "诊断里能看到 deepseek 模型", str(provs)[:120])
+        check(steps.get("agents", {}).get("ok") is True, "能列出 agents",
+              str(steps.get("agents", {}).get("data")))
 
     finally:
         proc.terminate()
