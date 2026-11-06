@@ -1,0 +1,338 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>AI 网关</title>
+<link rel="stylesheet" href="static/app.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="side">
+    <div class="brand">AI 网关<small>多上游聚合 · OpenAI 兼容</small></div>
+    <nav class="nav" id="nav">
+      <a data-tab="overview">概览</a>
+      <a data-tab="providers">上游</a>
+      <a data-tab="tokens">访问令牌</a>
+      <a data-tab="stats">统计</a>
+      <a data-tab="logs">日志</a>
+      <a data-tab="settings">设置</a>
+    </nav>
+    <div class="sidefoot" id="sideFoot"></div>
+  </aside>
+
+  <main class="main">
+    <!-- ========== 概览 ========== -->
+    <section class="tab" id="tab-overview">
+      <header class="pagehead">
+        <h1>概览</h1>
+        <p>一个接口，后面挂多个上游；某个失败会自动换下一家。</p>
+      </header>
+
+      <div class="stats">
+        <div class="card stat"><div class="k">24 小时请求</div><div class="v" id="sReqs">-</div></div>
+        <div class="card stat"><div class="k">24 小时花费</div><div class="v" id="sCost">-</div></div>
+        <div class="card stat"><div class="k">可用上游</div><div class="v" id="sLive">-</div></div>
+        <div class="card stat"><div class="k">排序策略</div><div class="v" id="sStrat" style="font-size:16px">-</div></div>
+      </div>
+
+      <h2>接入地址</h2>
+      <div class="card">
+        <div class="field"><label>直连（外部客户端用这个）</label>
+          <div class="inline"><input id="epDirect" readonly>
+            <button onclick="copyVal('epDirect','直连地址')">复制</button></div>
+          <div class="hint">Cherry Studio、OpenCode、脚本、手机 App 都用这一行。</div></div>
+
+        <div class="field"><label>本机（NAS 上的程序用这个）</label>
+          <div class="inline"><input id="epLocal" readonly>
+            <button onclick="copyVal('epLocal','本机地址')">复制</button></div></div>
+
+        <div class="field"><label>网关地址（仅飞牛浏览器内可用）</label>
+          <div class="inline"><input id="epGateway" readonly>
+            <button onclick="copyVal('epGateway','网关地址')">复制</button></div>
+          <div class="hint">这条路要 NAS 登录态，外部客户端用它会被挡在门外。</div></div>
+
+        <div class="field"><label>可用模型</label>
+          <div class="inline"><input id="epModels" readonly placeholder="加载中…">
+            <button onclick="copyVal('epModels','模型名')">复制</button></div></div>
+
+        <div class="field" style="margin-bottom:0"><label>调用示例</label>
+          <div class="inline"><input id="epCurl" readonly>
+            <button onclick="copyVal('epCurl','示例')">复制</button></div></div>
+      </div>
+
+      <h2>上游状态</h2>
+      <div class="row">
+        <button onclick="refreshAll()">刷新</button>
+        <button onclick="act('reload',{},'配置已重载')">重载配置</button>
+        <span class="msg" id="msgOverview"></span>
+      </div>
+      <div class="tablewrap">
+        <table class="wide">
+          <thead><tr>
+            <th>上游</th><th>状态</th><th>模型</th><th>免费额度</th>
+            <th>价格 $/M</th><th>24h 请求</th><th>花费</th><th>操作</th><th>最近错误</th>
+          </tr></thead>
+          <tbody id="provBody"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- ========== 上游 ========== -->
+    <section class="tab" id="tab-providers">
+      <header class="pagehead">
+        <h1>上游</h1>
+        <p>每张卡片是一个模型服务商。改完点「保存这张」只写回这一张。</p>
+      </header>
+      <div class="row">
+        <button class="pri" onclick="saveAll()">保存全部</button>
+        <button onclick="addPreset('openai')">+ OpenAI 兼容</button>
+        <button onclick="addPreset('openrouter')">+ OpenRouter</button>
+        <button onclick="addPreset('ollama')">+ 本地 Ollama</button>
+        <button onclick="addPreset('blank')">+ 空白上游</button>
+        <button onclick="loadCfg()">重新载入</button>
+        <span class="msg" id="msgProviders"></span>
+      </div>
+      <div class="pgrid" id="provGrid"></div>
+    </section>
+
+    <!-- ========== 令牌 ========== -->
+    <section class="tab" id="tab-tokens">
+      <header class="pagehead">
+        <h1>访问令牌</h1>
+        <p>给别人用时，一人一把，可单独停用和限额。</p>
+      </header>
+      <div class="card">
+        <div class="hint" id="tokHint" style="margin-bottom:10px">…</div>
+        <div class="inline" style="margin-bottom:8px">
+          <input id="verifyKey" placeholder="粘贴一把 Key 验证（排查 401）">
+          <button onclick="verifyKey()">验证 Key</button>
+          <span class="msg" id="verifyMsg"></span>
+        </div>
+        <div class="inline" style="margin-bottom:12px">
+          <input id="newTokName" placeholder="备注名，如 小明的笔记本">
+          <input id="newTokQuota" type="number" placeholder="额度 tokens（0 = 不限）" style="max-width:190px">
+          <button class="pri" onclick="createTok()">新建令牌</button>
+          <button onclick="loadTokens()">刷新</button>
+        </div>
+        <div class="tablewrap">
+          <table style="min-width:680px">
+            <thead><tr><th>备注</th><th>Key</th><th>已用 / 额度</th><th>状态</th><th>操作</th></tr></thead>
+            <tbody id="tokBody"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- ========== 统计 ========== -->
+    <section class="tab" id="tab-stats">
+      <header class="pagehead">
+        <h1>统计</h1>
+        <p>按天和按上游的用量汇总，数据来自本地账本。</p>
+      </header>
+
+      <div class="row" style="margin-top:0">
+        <select id="statDays" onchange="loadStats()" style="max-width:150px">
+          <option value="7" selected>最近 7 天</option>
+          <option value="30">最近 30 天</option>
+          <option value="90">最近 90 天</option>
+        </select>
+        <button onclick="loadStats()">刷新</button>
+        <span class="msg" id="msgStats"></span>
+      </div>
+
+      <div class="stats" id="statCards"></div>
+
+      <h2>按天</h2>
+      <div class="tablewrap">
+        <table style="min-width:640px">
+          <thead><tr><th>日期</th><th>请求</th><th>成功</th>
+            <th>输入 tokens</th><th>输出 tokens</th><th>花费</th></tr></thead>
+          <tbody id="statDaily"></tbody>
+        </table>
+      </div>
+
+      <h2>按上游</h2>
+      <div class="tablewrap">
+        <table style="min-width:760px">
+          <thead><tr><th>上游</th><th>请求</th><th>成功率</th><th>输入 tokens</th>
+            <th>输出 tokens</th><th>花费</th><th>平均耗时</th></tr></thead>
+          <tbody id="statProv"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- ========== 日志 ========== -->
+    <section class="tab" id="tab-logs">
+      <header class="pagehead">
+        <h1>日志</h1>
+        <p>每次调用的记录，以及服务本身的输出。</p>
+      </header>
+
+      <h2>调用日志</h2>
+      <div class="row" style="margin-top:0">
+        <button onclick="loadUsage()">刷新</button>
+        <label class="chk"><input type="checkbox" id="autoLog" onchange="toggleAuto()"> 自动刷新（5 秒）</label>
+        <select id="logLimit" onchange="loadUsage()" style="max-width:150px">
+          <option value="100">最近 100 条</option>
+          <option value="300" selected>最近 300 条</option>
+          <option value="1000">最近 1000 条</option>
+        </select>
+        <span class="msg" id="logMsg"></span>
+      </div>
+      <div class="tablewrap">
+        <table class="wide">
+          <thead><tr>
+            <th>时间</th><th>上游</th><th>模型</th><th>令牌</th><th>结果</th>
+            <th>输入/输出</th><th>花费</th><th>耗时</th><th>错误</th>
+          </tr></thead>
+          <tbody id="logBody"></tbody>
+        </table>
+      </div>
+
+      <h2>网关日志</h2>
+      <div class="row" style="margin-top:0">
+        <button onclick="loadGwLog()">刷新</button>
+        <span class="sub" id="gwLogPath"></span>
+      </div>
+      <pre id="gwLog">（暂无）</pre>
+    </section>
+
+    <!-- ========== 设置 ========== -->
+    <section class="tab" id="tab-settings">
+      <header class="pagehead">
+        <h1>设置</h1>
+        <p>改完即时生效，不需要重启服务。</p>
+      </header>
+
+      <h2>访问与路由</h2>
+      <div class="card">
+        <div class="f2">
+          <div class="field"><label>访问口令</label>
+            <div class="inline"><input id="setTok" type="password" placeholder="留空 = 免口令">
+              <button onclick="clearTok()">清除</button></div>
+            <div class="hint">自己的主口令。给别人用请去「访问令牌」建独立 Key。</div></div>
+          <div class="field"><label>失败冷却（秒）</label>
+            <input id="setCd" type="number" min="1" max="3600">
+            <div class="hint">某个上游失败后，等多久再试它。</div></div>
+        </div>
+        <div class="field"><label>排序策略</label>
+          <select id="setStrat">
+            <option value="priority">稳定优先（按优先级从上到下）</option>
+            <option value="cheapest">省钱优先（按价格从低到高）</option>
+          </select></div>
+        <div class="field" style="margin-bottom:0"><label>全局代理</label>
+          <div class="inline">
+            <select id="setProxyScheme" style="max-width:190px">
+              <option value="">不用代理</option>
+              <option value="http">HTTP</option>
+              <option value="https">HTTPS</option>
+              <option value="socks5">SOCKS5</option>
+              <option value="socks5h">SOCKS5（代理解析域名）</option>
+            </select>
+            <input id="setProxyAddr" placeholder="主机:端口，如 192.168.1.10:7890">
+            <button onclick="testProxy()">测试</button>
+          </div>
+          <div class="hint" id="proxyMsg">只有需要代理的上游才走它；国内直连的平台建议单独留空。</div></div>
+      </div>
+
+      <h2>出站指纹脱敏</h2>
+      <div class="card">
+        <label class="chk" style="margin-bottom:10px">
+          <input type="checkbox" id="sanOn"> 开启品牌词脱敏（改写后再发给上游）</label>
+        <div class="f2">
+          <div class="field"><label>作用域</label>
+            <select id="sanScope">
+              <option value="all">all — 所有消息角色（默认）</option>
+              <option value="user">user — 只改用户消息</option>
+              <option value="assistant">assistant — 只改助手历史</option>
+              <option value="system">system — 只改系统提示</option>
+            </select></div>
+          <div class="field"><label>替换为</label>
+            <input id="sanRepl" placeholder="该服务"></div>
+        </div>
+        <div class="field" style="margin-bottom:0"><label>品牌词（用顿号/逗号/换行分隔）</label>
+          <input id="sanWords" placeholder="OpenCode、opencode.ai、Claude Code">
+          <div class="hint">只影响发往上游的内容，不改你在客户端看到的历史。</div></div>
+        <div class="row" style="margin-bottom:0">
+          <button class="pri" onclick="saveSanitize()">保存脱敏设置</button>
+          <span class="msg" id="msgSan"></span>
+        </div>
+      </div>
+
+      <h2>OpenCode 运行时</h2>
+      <div class="hint" style="margin:-2px 0 10px">给 type=opencode 的上游用。三步：装好 → 登录（可选）→ 试一句。</div>
+      <div class="card">
+        <div class="row" style="margin-top:0">
+          <span class="tag d" id="ocTagInstall">安装 · 检测中</span>
+          <span class="tag d" id="ocTagLogin">登录 · 检测中</span>
+          <span class="tag d" id="ocTagRun">运行 · 检测中</span>
+          <span style="flex:1"></span>
+          <button onclick="ocRefresh()">刷新状态</button>
+        </div>
+
+        <div class="step">
+          <div class="stepno">1</div>
+          <div class="stepbody">
+            <div class="steptitle">安装 OpenCode</div>
+            <div class="sub" id="ocEnv">检测中…</div>
+            <div class="row" style="margin:10px 0 0">
+              <button class="pri" onclick="ocAct('install')">一键安装 / 升级</button>
+              <button onclick="ocAct('start')">启动服务</button>
+              <button onclick="ocAct('stop')">停止服务</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="step">
+          <div class="stepno">2</div>
+          <div class="stepbody">
+            <div class="steptitle">验证</div>
+            <div class="sub">用命令行方式真跑一句，通了就能用。</div>
+            <div class="row" style="margin:10px 0 0">
+              <button class="pri" onclick="ocAct('ping')">试一句</button>
+              <button onclick="ocAct('diagnose')">诊断</button>
+              <button onclick="ocAct('login')">登录 OpenCode</button>
+            </div>
+            <div id="ocGuide" style="margin-top:10px"></div>
+          </div>
+        </div>
+
+        <details style="margin-top:6px">
+          <summary class="sub">高级（路径 / 端口 / 工作目录 / API Key）</summary>
+          <div style="margin-top:8px">
+            <div class="f2">
+              <div class="field"><label>二进制路径</label>
+                <input id="ocBin" placeholder="留空 = 自动查找"></div>
+              <div class="field"><label>端口</label>
+                <input id="ocPort" type="number" placeholder="4096"></div>
+            </div>
+            <div class="field"><label>工作目录</label>
+              <input id="ocWs" placeholder="留空 = 应用数据目录下 opencode-workspace">
+              <div class="hint">建议留空，空目录能避免它误动你的文件。</div></div>
+            <div class="field"><label>Console API Key（可选）</label>
+              <input id="ocKey" type="password" placeholder="留空 = 未设置">
+              <div class="hint">会以 OPENCODE_API_KEY 注入 opencode 进程。</div></div>
+            <label class="chk"><input id="ocAuto" type="checkbox"> 崩溃后自动重启</label>
+            <div class="row" style="margin:10px 0 0">
+              <button class="pri" onclick="saveOc()">保存这些设置</button>
+            </div>
+          </div>
+        </details>
+
+        <details style="margin-top:4px">
+          <summary class="sub">日志</summary>
+          <div class="sub" style="margin:8px 0 4px">启动输出</div>
+          <pre id="ocLog">（暂无）</pre>
+          <div class="sub" style="margin:10px 0 4px">登录原始输出</div>
+          <pre id="ocLogin">（暂无）</pre>
+          <div class="sub" style="margin:10px 0 4px">opencode 自己的日志</div>
+          <pre id="ocOwnLog">（暂无）</pre>
+        </details>
+      </div>
+    </section>
+  </main>
+</div>
+<script src="static/app.js"></script>
+</body>
+</html>
