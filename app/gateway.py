@@ -36,6 +36,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse
 
 from opencode_upstream import OpenCodeClient, OpenCodeError
+from opencode_supervisor import OpenCodeSupervisor
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 APPNAME = "deepseek-gateway"
@@ -55,6 +56,32 @@ HOST = os.getenv("HOST", "0.0.0.0")
 SETTINGS_PATH = os.path.join(DATA_DIR, "settings.json")
 RUNTIME: dict = {"strategy": "priority", "cooldown": DEFAULT_COOLDOWN,
                  "gateway_token": GATEWAY_TOKEN, "proxy": ""}
+
+
+def opencode_opts() -> dict:
+    """托管器读的运行时选项：来自 settings.json + 当前是否有启用的 opencode 上游。"""
+    data: dict = {}
+    try:
+        with open(SETTINGS_PATH, encoding="utf-8") as fh:
+            data = json.load(fh) or {}
+    except Exception:
+        data = {}
+    try:
+        port = int(data.get("opencode_port") or 4096)
+    except Exception:
+        port = 4096
+    enabled = any(p["type"] == "opencode" and p["enabled"] for p in PROVIDERS)
+    return {
+        "bin": str(data.get("opencode_bin") or ""),
+        "port": port,
+        "workspace": str(data.get("opencode_workspace")
+                         or os.path.join(DATA_DIR, "opencode-workspace")),
+        "autostart": bool(data.get("opencode_autostart", True)),
+        "enabled": enabled,
+    }
+
+
+SUPERVISOR = OpenCodeSupervisor(DATA_DIR, opencode_opts)
 
 PROVIDERS: list[dict] = []
 SETTINGS: dict = {}
@@ -213,6 +240,7 @@ def config_snapshot() -> dict:
         "auth_enabled": bool(RUNTIME["gateway_token"]),
         "prefix": GATEWAY_PREFIX,
         "socket": SOCKET_PATH,
+        "opencode": opencode_opts(),
         "providers": provs,
     }
 
@@ -234,6 +262,17 @@ def config_save(body: dict) -> dict:
         patch["gateway_token"] = str(body["gateway_token"] or "").strip()
     if "proxy" in body:
         patch["proxy"] = str(body["proxy"] or "").strip()
+    if "opencode_bin" in body:
+        patch["opencode_bin"] = str(body["opencode_bin"] or "").strip()
+    if "opencode_workspace" in body:
+        patch["opencode_workspace"] = str(body["opencode_workspace"] or "").strip()
+    if "opencode_port" in body:
+        try:
+            patch["opencode_port"] = max(1, min(int(body["opencode_port"]), 65535))
+        except Exception:
+            raise ValueError("opencode 端口必须是整数") from None
+    if "opencode_autostart" in body:
+        patch["opencode_autostart"] = bool(body["opencode_autostart"])
 
     groups: dict[str, list] = {}
     for raw in body.get("providers") or []:
@@ -583,6 +622,7 @@ def call_provider(p: dict, payload: dict) -> tuple[dict, str]:
     type=opencode → 驱动本地 opencode serve（建会话→发消息→删会话）
     """
     if p["type"] == "opencode":
+        SUPERVISOR.ensure()             # 没在跑就自动拉起（失败不影响下面报错）
         client = OpenCodeClient(
             base_url=p["base_url"], model_id=p["model"],
             provider_id=p["opencode_provider"], agent=p["opencode_agent"],
@@ -708,6 +748,11 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json(401, {"error": "unauthorized"})
                 return
             self.send_json(200, config_snapshot())
+        elif path == "/admin/api/opencode":
+            if not authorized(self):
+                self.send_json(401, {"error": "unauthorized"})
+                return
+            self.send_json(200, SUPERVISOR.status())
         elif path == "/v1/models":
             if not authorized(self):
                 self.send_json(401, {"error": "unauthorized"})
@@ -736,6 +781,8 @@ class Handler(BaseHTTPRequestHandler):
             self.handle_chat()
         elif path == "/admin/api/config":
             self.handle_save_config()
+        elif path == "/admin/api/opencode":
+            self.handle_opencode()
         elif path == "/admin/api/reload":
             if not authorized(self):
                 self.send_json(401, {"error": "unauthorized"})
@@ -799,6 +846,37 @@ class Handler(BaseHTTPRequestHandler):
                 "ms": int((time.time() - t0) * 1000),
                 "error": err_text(exc)[:300],
             })
+
+    def handle_opencode(self) -> None:
+        """OpenCode 运行时控制：start / stop / install / log。"""
+        if not authorized(self):
+            self.send_json(401, {"error": "unauthorized"})
+            return
+        if not is_admin(self):
+            self.send_json(403, {"ok": False, "error": "只有 NAS 管理员能操作运行时"})
+            return
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+            action = str(json.loads(self.rfile.read(length) or b"{}").get("action", ""))
+        except Exception:
+            self.send_json(400, {"ok": False, "error": "bad request"})
+            return
+
+        if action == "start":
+            ok, msg = SUPERVISOR.start()
+        elif action == "stop":
+            ok, msg = SUPERVISOR.stop()
+        elif action == "install":
+            ok, msg = SUPERVISOR.install()
+        elif action == "log":
+            ok, msg = True, "ok"
+        else:
+            self.send_json(400, {"ok": False, "error": "action 只能是 start/stop/install/log"})
+            return
+
+        payload = SUPERVISOR.status()
+        payload.update({"ok": ok, "message": msg})
+        self.send_json(200, payload)
 
     def handle_save_config(self) -> None:
         """设置页整页保存。"""
@@ -1359,6 +1437,23 @@ _SETTINGS_BODY = """
     <input id="setProxy" placeholder="http://192.168.1.10:7890（留空 = 不用代理）" style="flex:1;min-width:280px">
   </div>
 
+  <h2>OpenCode 运行时（给 type=opencode 的上游用）</h2>
+  <div class="prov" style="max-width:840px">
+    <div class="hd"><span class="nm">opencode serve</span>
+      <span><span id="ocState" class="tag d">…</span></span></div>
+    <div class="fld"><label>二进制</label><input id="ocBin" placeholder="留空 = 自动查找（应用私有安装 / PATH）"></div>
+    <div class="fld"><label>端口</label><input id="ocPort" type="number" placeholder="4096"></div>
+    <div class="fld"><label>工作目录</label><input id="ocWs" placeholder="留空 = 应用数据目录下 opencode-workspace"></div>
+    <div class="fld"><label>自动重启</label><input id="ocAuto" type="checkbox"></div>
+    <div class="fld"><label></label>
+      <button onclick="ocAction('install')">一键安装</button>
+      <button onclick="ocAction('start')">启动</button>
+      <button onclick="ocAction('stop')">停止</button>
+      <button onclick="ocRefresh()">刷新状态</button>
+    </div>
+    <pre id="ocLog" style="max-height:170px;overflow:auto;background:#0d1117;border:1px solid var(--line);border-radius:8px;padding:8px;font-size:11px;margin:8px 0 0"></pre>
+  </div>
+
   <div class="row">
     <button class="pri" onclick="save()">保存全部</button>
     <button onclick="addProv()">+ 新增上游</button>
@@ -1415,6 +1510,12 @@ function render(){
   document.getElementById('setProxy').value = CFG.proxy || '';
   document.getElementById('setTok').placeholder =
     CFG.auth_enabled ? '已设置（留空不改）' : '留空 = 免口令';
+  const oc = CFG.opencode || {};
+  document.getElementById('ocPort').value = oc.port || 4096;
+  document.getElementById('ocBin').value = oc.bin || '';
+  document.getElementById('ocWs').value = oc.workspace || '';
+  document.getElementById('ocAuto').checked = oc.autostart !== false;
+  ocRefresh();
 }
 
 async function loadCfg(){
@@ -1452,6 +1553,10 @@ function collect(){
   };
   const t = (document.getElementById('setTok').value || '').trim();
   if(t) body.gateway_token = t;
+  body.opencode_bin = document.getElementById('ocBin').value;
+  body.opencode_port = Number(document.getElementById('ocPort').value || 4096);
+  body.opencode_workspace = document.getElementById('ocWs').value;
+  body.opencode_autostart = document.getElementById('ocAuto').checked;
   return body;
 }
 
@@ -1491,6 +1596,35 @@ async function probeOne(name){
     msg(d.ok ? ('[通] ' + name + '  ' + d.ms + 'ms  ' + (d.sample||'').slice(0,60))
              : ('[失败] ' + (d.error||'')));
   }catch(e){ msg('自检失败：' + e.message); }
+}
+
+function ocPaint(d){
+  const el = document.getElementById('ocState');
+  el.textContent = d.running ? ('运行中 pid ' + d.pid)
+                             : (d.installed ? '未运行' : '未安装');
+  el.className = 'tag ' + (d.running ? 'g' : (d.installed ? 'y' : 'd'));
+  document.getElementById('ocLog').textContent =
+    (d.last_error ? ('[错误] ' + d.last_error + '
+') : '') + (d.log || '(无日志)');
+}
+
+async function ocRefresh(){
+  try{
+    const d = await api('/admin/api/opencode');
+    ocPaint(d);
+    if(d.bin && !document.getElementById('ocBin').value){
+      document.getElementById('ocBin').placeholder = '自动：' + d.bin;
+    }
+  }catch(e){ if(e.message!=='unauthorized') msg('读取运行时状态失败：'+e.message); }
+}
+
+async function ocAction(action){
+  msg('执行中：' + action + ' …');
+  try{
+    const d = await api('/admin/api/opencode', {method:'POST', body: JSON.stringify({action})});
+    msg((d.ok ? '[成功] ' : '[失败] ') + (d.message || ''));
+    ocPaint(d);
+  }catch(e){ msg('操作失败：' + e.message); }
 }
 
 async function clearTok(){
@@ -1562,6 +1696,8 @@ def main() -> int:
     signal.signal(signal.SIGTERM, _shutdown)
     signal.signal(signal.SIGINT, _shutdown)
 
+    threading.Thread(target=SUPERVISOR.watch, daemon=True).start()
+
     live = sum(1 for p in PROVIDERS if p["enabled"] and p["api_key"])
     print(f"[gateway] 监听 http://{HOST}:{PORT}  上游 {len(PROVIDERS)} 个 / 可用 {live} 个",
           flush=True)
@@ -1571,6 +1707,10 @@ def main() -> int:
         srv.server_close()
         if sock_srv is not None:
             sock_srv.server_close()
+        try:
+            SUPERVISOR.shutdown()
+        except Exception:
+            pass
         print("[gateway] 已退出", flush=True)
     return 0
 
