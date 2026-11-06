@@ -106,3 +106,7 @@ details[open] summary::before{content:"▾ "}
   .main{padding:16px 14px 60px}
   .f2{grid-template-columns:1fr}
 }
+
+textarea:focus{outline:none;border-color:var(--acc);
+  box-shadow:0 0 0 3px rgba(37,99,235,.12)}
+.capin{width:96px;padding:4px 6px;font-size:12px}
