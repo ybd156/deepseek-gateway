@@ -74,6 +74,11 @@ class Upstream(BaseHTTPRequestHandler):
             self._json(200, {"data": [
                 {"id": "m-free:free"},
                 {"id": "m-paid", "pricing": {"prompt": "0.1", "completion": "0.2"}},
+                # 带完整能力元数据的模型（OpenRouter 风格字段）
+                {"id": "meta-model",
+                 "context_length": 111111,
+                 "top_provider": {"max_completion_tokens": 2222},
+                 "architecture": {"input_modalities": ["text", "image"]}},
             ]})
         else:
             self._json(404, {"error": "nf"})
@@ -615,6 +620,62 @@ def main() -> int:
         check(mc.get("total", 0) >= 3, "列出全部模型", str(mc.get("total")))
         check(mc.get("usable", 0) < mc.get("total", 0), "区分可用与不可用",
               str(mc.get("usable")) + "/" + str(mc.get("total")))
+
+        http("POST", base + "/admin/api/config", {
+            "strategy": "priority", "cooldown_seconds": 5,
+            "providers": base_providers})
+
+
+        print("== 30. 网关自己会问上游要能力 ==")
+        http("POST", base + "/admin/api/config", {
+            "strategy": "priority", "cooldown_seconds": 5,
+            "providers": [
+                {"name": "meta", "enabled": True, "priority": 1,
+                 "base_url": f"http://127.0.0.1:{UP_PORT}",
+                 "model": "meta-model", "api_key": "k"}]})
+        code, _, txt = http("POST", base + "/admin/api/refresh-caps", {"name": "meta"})
+        rc = json.loads(txt)
+        check(code == 200 and rc.get("ok") is True, "探测接口可用", str(code))
+        check(rc.get("updated", 0) >= 1, "探测到能力", str(rc))
+
+        code, _, txt = http("GET", base + "/v1/models",
+                            headers={"Authorization": "Bearer " + key})
+        mm = next((m for m in json.loads(txt)["data"] if m["id"] == "meta-model"), {})
+        check(mm.get("context_length") == 111111, "上下文来自上游",
+              str(mm.get("context_length")))
+        check(mm.get("max_output_tokens") == 2222, "最大输出也来自上游",
+              str(mm.get("max_output_tokens")))
+        check(mm.get("supports_vision") is True, "图片支持来自上游",
+              str(mm.get("supports_vision")))
+        check(mm.get("capability_source") == "upstream", "标出来源是上游",
+              str(mm.get("capability_source")))
+
+        print("== 31. 手填的值优先于上游 ==")
+        http("POST", base + "/admin/api/config",
+             {"model_caps": {"meta-model": {"context": 8000}}})
+        code, _, txt = http("GET", base + "/v1/models",
+                            headers={"Authorization": "Bearer " + key})
+        mm2 = next((m for m in json.loads(txt)["data"] if m["id"] == "meta-model"), {})
+        check(mm2.get("context_length") == 8000, "手动覆盖生效",
+              str(mm2.get("context_length")))
+        check(mm2.get("capability_source") == "manual", "来源变手动",
+              str(mm2.get("capability_source")))
+        check(mm2.get("max_output_tokens") == 2222, "没覆盖的仍用上游值",
+              str(mm2.get("max_output_tokens")))
+        http("POST", base + "/admin/api/config", {"model_caps": {}})
+
+        print("== 32. 网关自述（下游据此知道网关能力）==")
+        code, hdrs, txt = http("GET", base + "/v1/gateway",
+                               headers={"Authorization": "Bearer " + key})
+        gi = json.loads(txt)
+        check(code == 200 and gi.get("object") == "gateway", "有 /v1/gateway", str(code))
+        for f in ("features", "limits", "policy", "auth", "counts",
+                  "capability_sources", "endpoints"):
+            check(f in gi, "自述含 " + f, str(list(gi))[:80])
+        check(gi["limits"].get("max_context", 0) > 0, "自述带最大上下文",
+              str(gi["limits"].get("max_context")))
+        check(gi["features"].get("vision") is True, "自述声明支持视觉",
+              str(gi["features"].get("vision")))
 
         http("POST", base + "/admin/api/config", {
             "strategy": "priority", "cooldown_seconds": 5,
