@@ -4,6 +4,16 @@
       "title": "DeepSeek 网关",
       "icon": "images/icon_{0}.png",
       "type": "iframe",
+      "protocol": "",
+      "gatewayPrefix": "/app/deepseek-gateway",
+      "gatewaySocket": "app.sock",
+      "url": "/app/deepseek-gateway/admin",
+      "allUsers": true
+    },
+    "deepseek-gateway.direct": {
+      "title": "DeepSeek 网关（直连端口）",
+      "icon": "images/icon_{0}.png",
+      "type": "iframe",
       "protocol": "http",
       "port": "18787",
       "url": "/admin",
