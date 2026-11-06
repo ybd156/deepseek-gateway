@@ -1,5 +1,5 @@
 appname=deepseek-gateway
-version=2.4.0
+version=2.4.1
 display_name=DeepSeek 网关
 desc=把火山方舟、硅基流动、OpenRouter、腾讯 TokenHub、百度千帆、DeepSeek 官方等多个上游聚合成一个 OpenAI 兼容端点。<br>默认只启用免费上游，付费一律关闭；免费额度用尽自动停用，绝不静默转付费。<br>纯 Python 标准库实现，不依赖 Docker 与任何第三方包。
 source=thirdparty
@@ -13,4 +13,4 @@ desktop_applaunchname=deepseek-gateway.main
 service_port=18787
 checkport=true
 ctl_stop=true
-changelog=2.4.0：每个上游可选「协议」——OpenAI Chat Completions / OpenAI Responses（/responses）/ Anthropic Messages / Google Gemini，网关自动做请求与响应的双向转换（客户端始终用 OpenAI 形状）；状态表标出每个上游用的协议。OpenCode 加「试一句」按钮（30 秒快速验证，不用等 300 秒），诊断会额外拉服务端 API 契约。2.3.x：日志页、502 说明原因。2.2.x：设置拆页、单卡保存、/v1/models 鉴权。2.1.x：多模型与探测。1.1.0：免费优先。1.0.0：首个版本。
+changelog=2.4.1：OpenCode 排障加强——面板新增「opencode 自己的日志」（provider 报错都在那里，不在网关日志里）；「试一句」改为分步探测：建会话→发消息（25 秒）→若卡住则回查服务端有没有产出消息、有没有待批准的权限请求，把 JSON 直接显示出来。2.4.0：上游协议可选。2.3.x：日志页与 502 说明。2.2.x：设置拆页。2.1.x：多模型。1.1.0：免费优先。1.0.0：首个版本。
