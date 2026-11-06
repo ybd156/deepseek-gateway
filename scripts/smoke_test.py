@@ -887,6 +887,28 @@ def main() -> int:
         http("POST", base + "/admin/api/set-settings", {"gateway_token": ""},
              headers={"Authorization": "Bearer sk-master-x"})
 
+        print("== 25. 日志 ==")
+        code, _, txt = http("GET", base + "/admin/api/logs?kind=usage&limit=50")
+        lg = json.loads(txt) if code == 200 else {}
+        check(code == 200 and lg.get("ok") is True, "调用日志可读", txt[:80])
+        rows = lg.get("rows") or []
+        check(len(rows) > 0, "有调用记录", str(len(rows)))
+        if rows:
+            r0 = rows[0]
+            need = {"time", "provider", "model", "token", "ok", "ms"}
+            check(need.issubset(r0.keys()), "记录字段完整", str(sorted(r0.keys())))
+            check(any(x["ok"] for x in rows), "记录里既有成功也有失败",
+                  str([x["ok"] for x in rows[:5]]))
+
+        code, _, txt = http("GET", base + "/admin/api/logs?kind=usage&limit=1")
+        lg1 = json.loads(txt) if code == 200 else {}
+        check(len(lg1.get("rows") or []) == 1, "limit 生效", str(len(lg1.get("rows") or [])))
+
+        code, _, txt = http("GET", base + "/admin/api/logs?kind=gateway&limit=50")
+        gw = json.loads(txt) if code == 200 else {}
+        check(code == 200 and isinstance(gw.get("text"), str), "网关日志可读",
+              str(gw.get("path"))[:80])
+
     finally:
         proc.terminate()
         try:
