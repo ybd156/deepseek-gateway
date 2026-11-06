@@ -1340,7 +1340,7 @@ class Handler(BaseHTTPRequestHandler):
             if not is_admin(self):
                 self.send_json(401, {"error": "unauthorized"})
                 return
-            self.send_json(200, SUPERVISOR.status())
+            self.send_json(200, opencode_view())
             return
         self.send_json(404, {"error": "not found"})
 
@@ -1485,7 +1485,7 @@ class Handler(BaseHTTPRequestHandler):
         elif action == "diagnose":
             base = "http://127.0.0.1:%d" % int(opencode_opts().get("port") or 4096)
             client = OpenCodeClient(base_url=base, model_id="", timeout=10)
-            payload = SUPERVISOR.status()
+            payload = opencode_view()
             payload.update(ok=True, message="诊断完成", diag=client.diagnose())
             self.send_json(200, payload)
             return
@@ -1495,7 +1495,7 @@ class Handler(BaseHTTPRequestHandler):
         else:
             self.send_json(400, {"ok": False, "error": "未知操作"})
             return
-        payload = SUPERVISOR.status()
+        payload = opencode_view()
         payload.update(ok=ok, message=msg)
         self.send_json(200, payload)
 
@@ -1510,7 +1510,7 @@ class Handler(BaseHTTPRequestHandler):
         if bin_path:
             tag = os.path.basename(bin_path) + " " + (SUPERVISOR._version(bin_path) or "?")
 
-        payload = SUPERVISOR.status()
+        payload = opencode_view()
         if pick and (pick.get("opencode_mode") or "server").lower() == "cli":
             try:
                 data, _w = call_opencode_cli(
@@ -2500,6 +2500,34 @@ def errors_payload(limit: int = 3000) -> dict:
         return {"ok": False, "error": str(exc)}
     rows = sorted(out.values(), key=lambda x: (-x["count"], -x["last"]))
     return {"ok": True, "rows": rows, "kinds": len({r["kind"] for r in rows})}
+
+
+def opencode_view() -> dict:
+    """OpenCode 状态 + 这个面板该怎么解读它。
+
+    关键：走命令行（cli）时不需要 serve 在跑，也不需要登录——
+    免费模型就是靠命令行用的。界面不该把这两项显示成「没做好」。
+    """
+    st = SUPERVISOR.status()
+    oc = [p for p in PROVIDERS if p["type"] == "opencode"]
+    cli = [p for p in oc if (p.get("opencode_mode") or "server").lower() == "cli"]
+    live_cli = [p for p in cli if p["enabled"]]
+    cli_mode = bool(live_cli) or (bool(cli) and not any(
+        (p.get("opencode_mode") or "server").lower() == "server" for p in oc))
+
+    st["cli_mode"] = cli_mode
+    st["has_opencode_provider"] = bool(oc)
+    st["needs_server"] = not cli_mode
+    st["needs_login"] = False if cli_mode else True
+    st["ready"] = bool(st.get("installed")) and (cli_mode or st.get("running"))
+    if cli_mode:
+        st["mode_note"] = ("命令行模式：不需要启动服务，也不需要登录。"
+                           "装好就能用免费模型。")
+    elif st.get("running"):
+        st["mode_note"] = "服务端模式：serve 正在运行。"
+    else:
+        st["mode_note"] = "服务端模式：需要先启动 serve（或改成命令行模式）。"
+    return st
 
 
 def status_payload() -> dict:
