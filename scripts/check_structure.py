@@ -234,6 +234,26 @@ def main() -> int:
     except Exception as exc:                           # noqa: BLE001
         check(False, "桌面入口检查", str(exc))
 
+    print("== 7f. 应用信息（开发者 / 发布者）==")
+    try:
+        mf2 = {}
+        for line in open("manifest", encoding="utf-8").read().splitlines():
+            if "=" in line:
+                k, v = line.split("=", 1)
+                mf2[k.strip()] = v.strip()
+        dev = mf2.get("maintainer", "")
+        dev_url = mf2.get("maintainer_url", "")
+        pub = mf2.get("distributor", "")
+        pub_url = mf2.get("distributor_url", "")
+        check(bool(dev) and not dev.startswith("http"),
+              "开发者是名称而不是网址", dev)
+        check(dev_url.startswith("http"), "开发者带可点击链接", dev_url)
+        check(bool(pub) and not pub.startswith("http"),
+              "发布者是名称而不是网址", pub)
+        check(pub_url.startswith("http"), "发布者带可点击链接", pub_url)
+    except Exception as exc:                           # noqa: BLE001
+        check(False, "应用信息检查", str(exc))
+
     print("== 8. 图标尺寸 ==")
     try:
         from PIL import Image
