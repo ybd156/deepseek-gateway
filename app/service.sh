@@ -41,6 +41,8 @@ write_run() {
 export CONFIG_PATH='$TRIM_PKGETC/providers.json'
 export DATA_DIR='$TRIM_PKGVAR'
 export PORT='$port'
+export GATEWAY_SOCKET='$TRIM_APPDEST/app.sock'
+export GATEWAY_PREFIX='/app/deepseek-gateway'
 export GATEWAY_TOKEN='$v_token'
 export COOLDOWN_SECONDS='${v_cd:-60}'
 export STRATEGY='${v_strat:-priority}'
