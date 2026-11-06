@@ -20,6 +20,7 @@ import json
 import os
 import shutil
 import socket
+import socketserver
 import subprocess
 import sys
 import tempfile
@@ -32,10 +33,12 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 GATEWAY = os.path.join(ROOT, "app", "gateway.py")
+sys.path.insert(0, os.path.join(ROOT, "app"))
 
 GW_PORT = 18888
 UP_PORT = 18999
 OC_PORT = 18998            # 假 opencode server
+SOCKS_PORT = 18996          # 假 SOCKS5 代理
 DEAD_PORT = 18997          # 没有任何服务监听，用来测故障切换
 
 MODEL = "deepseek/deepseek-v4.1-flash-1017"
@@ -130,6 +133,71 @@ class FakeOpenCode(BaseHTTPRequestHandler):
         self._json(200, {"ok": True})
 
 
+class FakeSocks5(socketserver.BaseRequestHandler):
+    """极简 SOCKS5：无认证 + CONNECT，把流量转发到假上游。"""
+
+    @staticmethod
+    def _read(sock, n):
+        buf = b""
+        while len(buf) < n:
+            chunk = sock.recv(n - len(buf))
+            if not chunk:
+                break
+            buf += chunk
+        return buf
+
+    @staticmethod
+    def _pipe(a, b):
+        try:
+            while True:
+                data = a.recv(65536)
+                if not data:
+                    break
+                b.sendall(data)
+        except Exception:
+            pass
+        finally:
+            try:
+                b.shutdown(socket.SHUT_WR)
+            except Exception:
+                pass
+
+    def handle(self):
+        c = self.request
+        try:
+            hdr = self._read(c, 2)
+            if len(hdr) < 2:
+                return
+            self._read(c, hdr[1])
+            c.sendall(bytes([5, 0]))                      # 无认证
+            req = self._read(c, 4)
+            if len(req) < 4:
+                return
+            atyp = req[3]
+            if atyp == 1:
+                self._read(c, 4)
+            elif atyp == 3:
+                ln = self._read(c, 1)
+                if not ln:
+                    return
+                self._read(c, ln[0])
+            else:
+                self._read(c, 16)
+            self._read(c, 2)
+            up = socket.create_connection(("127.0.0.1", UP_PORT), timeout=5)
+            c.sendall(bytes([5, 0, 0, 1]) + socket.inet_aton("127.0.0.1")
+                      + UP_PORT.to_bytes(2, "big"))
+            threading.Thread(target=self._pipe, args=(c, up), daemon=True).start()
+            self._pipe(up, c)
+        except Exception:
+            pass
+        finally:
+            try:
+                c.close()
+            except Exception:
+                pass
+
+
 def free_port(port: int) -> bool:
     s = socket.socket()
     s.settimeout(0.5)
@@ -190,6 +258,10 @@ def main() -> int:
     upstream = ThreadingHTTPServer(("127.0.0.1", UP_PORT), Upstream)
     upstream.daemon_threads = True
     threading.Thread(target=upstream.serve_forever, daemon=True).start()
+
+    socks = socketserver.ThreadingTCPServer(("127.0.0.1", SOCKS_PORT), FakeSocks5)
+    socks.daemon_threads = True
+    threading.Thread(target=socks.serve_forever, daemon=True).start()
 
     oc = ThreadingHTTPServer(("127.0.0.1", OC_PORT), FakeOpenCode)
     oc.daemon_threads = True
@@ -501,6 +573,44 @@ def main() -> int:
         code, _, txt = http("POST", base + "/admin/api/opencode", {"action": "stop"})
         check(code == 200 and json.loads(txt).get("ok") is True, "停止幂等", txt[:80])
 
+        print("== 14. 代理：地址解析 + SOCKS5 端到端 ==")
+        from proxy_support import parse_proxy
+        check(parse_proxy("192.168.1.10:7890") == ("http", "192.168.1.10", 7890),
+              "裸地址按 http 解析", str(parse_proxy("192.168.1.10:7890")))
+        check(parse_proxy("socks5://127.0.0.1:1080")[:2] == ("socks5", "127.0.0.1"),
+              "识别 socks5 协议", str(parse_proxy("socks5://127.0.0.1:1080")))
+        check(parse_proxy("") is None, "空值返回 None")
+
+        code, _, txt = http("POST", base + "/admin/api/set-settings",
+                            {"proxy": f"socks5://127.0.0.1:{SOCKS_PORT}"})
+        check(code == 200, "设置 socks5 全局代理", txt[:80])
+        code, hdrs, txt = http("POST", base + "/v1/chat/completions",
+                               {"messages": [{"role": "user", "content": "via socks"}]})
+        check(code == 200 and hdrs.get("X-Gateway-Provider") == "good",
+              "经 SOCKS5 隧道调用成功", f"{code} {hdrs.get('X-Gateway-Provider')}")
+
+        print("== 15. 免密钥上游（本地 Ollama 这类）==")
+        code, _, txt = http("GET", base + "/admin/api/config")
+        cfg2 = json.loads(txt)
+        cfg2["proxy"] = ""
+        cfg2["providers"].append({
+            "name": "local-noauth", "type": "http", "enabled": True, "priority": 0,
+            "base_url": f"http://127.0.0.1:{UP_PORT}", "model": MODEL,
+            "no_auth": True, "free_only": True, "free_quota_tokens": 0,
+            "price_in": 0, "price_out": 0, "_source": "main",
+        })
+        code, _, txt = http("POST", base + "/admin/api/config", cfg2)
+        check(code == 200 and json.loads(txt).get("ok"), "保存免密钥上游", txt[:100])
+        code, hdrs, txt = http("POST", base + "/v1/chat/completions",
+                               {"messages": [{"role": "user", "content": "no key"}]})
+        check(code == 200 and hdrs.get("X-Gateway-Provider") == "local-noauth",
+              "没有 Key 也能调用", f"{code} {hdrs.get('X-Gateway-Provider')}")
+        code, _, txt = http("GET", base + "/admin/api/status")
+        st2 = json.loads(txt)
+        ln = next((x for x in st2["providers"] if x["name"] == "local-noauth"), {})
+        check(ln.get("has_key") is True and ln.get("key_source") == "免密钥",
+              "状态显示为免密钥", f"{ln.get('has_key')} / {ln.get('key_source')}")
+
     finally:
         proc.terminate()
         try:
@@ -509,6 +619,7 @@ def main() -> int:
             proc.kill()
         upstream.shutdown()
         oc.shutdown()
+        socks.shutdown()
         shutil.rmtree(tmp, ignore_errors=True)
 
     print()
