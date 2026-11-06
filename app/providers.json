@@ -21,7 +21,8 @@
       "price_in": 0,
       "price_out": 0,
       "quant": "-",
-      "note": "OpenCode 免费档：先在本机跑 opencode serve（见 README）；限时免费、无流式、200K 上下文"
+      "note": "OpenCode 免费档：先在本机跑 opencode serve（见 README）；限时免费、无流式、200K 上下文",
+      "console_url": "https://opencode.ai/docs/zen"
     },
     {
       "name": "nvidia-nim",
@@ -36,7 +37,8 @@
       "price_in": 0,
       "price_out": 0,
       "quant": "fp8",
-      "note": "NVIDIA NIM 免费端点（build.nvidia.com 标 Free Endpoint）；需海外网络；额度说法不一，以控制台为准"
+      "note": "NVIDIA NIM 免费端点（build.nvidia.com 标 Free Endpoint）；需海外网络；额度说法不一，以控制台为准",
+      "console_url": "https://build.nvidia.com/settings/api-keys"
     },
     {
       "name": "huawei-maas",
@@ -51,7 +53,8 @@
       "price_in": 0,
       "price_out": 0,
       "quant": "fp8",
-      "note": "华为云 ModelArts Studio：每模型 200 万 tokens 免费（国内额度最大）；模型名/base_url 以控制台「调用说明」为准"
+      "note": "华为云 ModelArts Studio：每模型 200 万 tokens 免费（国内额度最大）；模型名/base_url 以控制台「调用说明」为准",
+      "console_url": "https://console.huaweicloud.com/modelarts/"
     },
     {
       "name": "volc-ark",
@@ -66,7 +69,8 @@
       "price_in": 0.14,
       "price_out": 0.56,
       "quant": "fp8",
-      "note": "火山方舟：每模型 50 万 tokens 免费额度，用尽后网关自动停用（不会转付费）"
+      "note": "火山方舟：每模型 50 万 tokens 免费额度，用尽后网关自动停用（不会转付费）",
+      "console_url": "https://console.volcengine.com/ark"
     },
     {
       "name": "siliconflow",
@@ -81,7 +85,8 @@
       "price_in": 0.3,
       "price_out": 0.55,
       "quant": "fp8",
-      "note": "硅基流动：先把 model 改成控制台里带 Free 标签的模型名，再把 enabled 改成 true"
+      "note": "硅基流动：先把 model 改成控制台里带 Free 标签的模型名，再把 enabled 改成 true",
+      "console_url": "https://cloud.siliconflow.cn/account/ak"
     },
     {
       "name": "tencent-tokenhub",
@@ -96,7 +101,8 @@
       "price_in": 0.15,
       "price_out": 0.6,
       "quant": "fp8",
-      "note": "腾讯云 TokenHub：新人 100 万 tokens / 90 天；模型名以控制台为准"
+      "note": "腾讯云 TokenHub：新人 100 万 tokens / 90 天；模型名以控制台为准",
+      "console_url": "https://console.cloud.tencent.com/tokenhub"
     },
     {
       "name": "baidu-qianfan",
@@ -111,7 +117,8 @@
       "price_in": 0.098,
       "price_out": 0.394,
       "quant": "fp8",
-      "note": "百度千帆：每模型 100 万 tokens / 3 个月；模型名以控制台为准"
+      "note": "百度千帆：每模型 100 万 tokens / 3 个月；模型名以控制台为准",
+      "console_url": "https://console.bce.baidu.com/qianfan/ais/console/applicationConsole/application"
     },
     {
       "name": "or-morph",
@@ -128,11 +135,14 @@
       "quant": "fp8",
       "extra": {
         "provider": {
-          "only": ["Morph"],
+          "only": [
+            "Morph"
+          ],
           "allow_fallbacks": false
         }
       },
-      "note": "付费：性价比最高，$0.022/M 且 fp8；需代理"
+      "note": "付费：性价比最高，$0.022/M 且 fp8；需代理",
+      "console_url": "https://openrouter.ai/keys"
     },
     {
       "name": "or-particle-flex",
@@ -149,11 +159,14 @@
       "quant": "-",
       "extra": {
         "provider": {
-          "only": ["Particle AI"],
+          "only": [
+            "Particle AI"
+          ],
           "allow_fallbacks": false
         }
       },
-      "note": "付费：输出最便宜之一；flex 档低优先级排队"
+      "note": "付费：输出最便宜之一；flex 档低优先级排队",
+      "console_url": "https://openrouter.ai/keys"
     },
     {
       "name": "or-deepinfra-flex",
@@ -170,11 +183,14 @@
       "quant": "fp8",
       "extra": {
         "provider": {
-          "only": ["DeepInfra"],
+          "only": [
+            "DeepInfra"
+          ],
           "allow_fallbacks": false
         }
       },
-      "note": "付费：51% 折扣价，fp8"
+      "note": "付费：51% 折扣价，fp8",
+      "console_url": "https://openrouter.ai/keys"
     },
     {
       "name": "or-sail",
@@ -191,11 +207,14 @@
       "quant": "fp4",
       "extra": {
         "provider": {
-          "only": ["Sail Research"],
+          "only": [
+            "Sail Research"
+          ],
           "allow_fallbacks": false
         }
       },
-      "note": "付费：输出价最低，但 fp4 量化"
+      "note": "付费：输出价最低，但 fp4 量化",
+      "console_url": "https://openrouter.ai/keys"
     },
     {
       "name": "or-openinference",
@@ -212,11 +231,14 @@
       "quant": "fp4",
       "extra": {
         "provider": {
-          "only": ["OpenInference"],
+          "only": [
+            "OpenInference"
+          ],
           "allow_fallbacks": false
         }
       },
-      "note": "付费：输入最便宜（$0.006/M），但 fp4 质量下降"
+      "note": "付费：输入最便宜（$0.006/M），但 fp4 质量下降",
+      "console_url": "https://openrouter.ai/keys"
     },
     {
       "name": "deepseek-official",
@@ -230,7 +252,8 @@
       "price_in": 0.15,
       "price_out": 0.6,
       "quant": "-",
-      "note": "付费：官方兜底；闲时半价、缓存命中 $0.003；1M 上下文"
+      "note": "付费：官方兜底；闲时半价、缓存命中 $0.003；1M 上下文",
+      "console_url": "https://platform.deepseek.com/api_keys"
     }
   ]
 }
