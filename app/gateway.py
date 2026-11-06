@@ -2413,6 +2413,13 @@ _CSS = """
   .msg{color:var(--acc);font-size:12px}
   .err{color:var(--err);font-size:11px;max-width:240px;overflow:hidden;
        text-overflow:ellipsis;white-space:nowrap;display:inline-block}
+  .step{display:flex;gap:12px;padding:16px 0;border-top:1px solid var(--line)}
+  .step:first-of-type{border-top:none;padding-top:6px}
+  .stepno{width:24px;height:24px;border-radius:50%;background:var(--soft);color:var(--acc);
+          font-weight:700;font-size:12px;display:flex;align-items:center;
+          justify-content:center;flex:none;margin-top:1px}
+  .stepbody{flex:1;min-width:0}
+  .steptitle{font-weight:700;font-size:13px;margin-bottom:2px}
   .sect{display:none}
   .sect.on{display:block}
   .pgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(380px,1fr));gap:14px}
@@ -2804,63 +2811,88 @@ NAV
 
     <!-- ===== OpenCode ===== -->
     <div class="sect" data-sect="opencode">
-      <h2>OpenCode 运行时（给 type=opencode 的上游用）</h2>
-      <div class="hint" style="margin:-2px 0 10px;line-height:1.8">
-        <b>免费模型只能在他的客户端里用。</b>官方文档原文：
-        <span class="mono">Free-tier chat models require OpenCode; use paid models or Go from other clients.</span>
-        所以无论走 serve 还是 run，都会被限流并返回
-        <span class="mono">Free usage limit reached</span>（issue #59387）。<br>
-        <b>要用 API 得用付费模型</b>：Console 充值后拿 API Key，配上「<b>opencode-zen</b>」那张卡片
-        （<span class="mono">https://opencode.ai/inference/openai/v1</span>）即可，价格便宜
-        （DeepSeek V4.1 Flash $0.30/$1.20 每百万 tokens）。<br>
-        另外 <b>v1（0.x/1.x）已不支持免费模型</b>，要用必须装 v2（<span class="mono">opencode2</span>）。
-      </div>
+      <h2>OpenCode 运行时</h2>
+      <div class="hint" style="margin:-2px 0 10px">给 type=opencode 的上游用。三步：装好 → 登录 → 试一句。</div>
       <div class="card">
-        <div class="phd"><span class="nm">opencode serve</span>
-          <span><span id="ocState" class="tag d">…</span></span></div>
-        <div class="hint" id="ocEnv" style="margin-bottom:12px">检测中…</div>
-        <div class="f2">
-          <div class="field"><label>二进制路径</label>
-            <input id="ocBin" placeholder="留空 = 自动查找"></div>
-          <div class="field"><label>端口</label>
-            <input id="ocPort" type="number" placeholder="4096"></div>
-        </div>
-        <div class="field"><label>工作目录</label>
-          <input id="ocWs" placeholder="留空 = 应用数据目录下 opencode-workspace">
-          <div class="hint">建议留空。它是个编码 Agent，空目录能避免误动你的文件。</div></div>
-        <div class="field"><label>Console API Key（可选）</label>
-          <input id="ocKey" type="password" placeholder="留空 = 未设置">
-          <div class="hint">会以 <span class="mono">OPENCODE_API_KEY</span> 注入 opencode 进程
-            （serve 和 run 都继承）。免费模型认不认它取决于官方策略；付费模型一定认。</div></div>
-        <div class="row" style="margin-bottom:0">
-          <label class="chk"><input id="ocAuto" type="checkbox"> 崩溃后自动重启</label>
+        <div class="row" style="margin-top:0;gap:8px">
+          <span class="tag d" id="ocTagInstall">安装 · 检测中</span>
+          <span class="tag d" id="ocTagLogin">登录 · 检测中</span>
+          <span class="tag d" id="ocTagRun">运行 · 检测中</span>
           <span style="flex:1"></span>
-          <button onclick="ocAction('install')">一键安装</button>
-          <button onclick="ocAction('start')">启动</button>
-          <button onclick="ocAction('stop')">停止</button>
-          <button onclick="ocAction('login')">登录 OpenCode</button>
-          <button onclick="ocAction('login-log')">登录输出</button>
-          <button onclick="ocAction('ping')">试一句</button>
-          <button onclick="ocAction('diagnose')">诊断</button>
-          <button onclick="ocRefresh()">刷新</button>
+          <button onclick="ocRefresh()">刷新状态</button>
         </div>
-        <div class="sub" style="margin:10px 0 4px">启动输出</div>
-        <pre id="ocLog">（暂无日志）</pre>
-        <div class="sub" style="margin:12px 0 6px">登录向导</div>
-        <div id="ocGuide"></div>
-        <details style="margin:8px 0 0">
-          <summary class="sub" style="cursor:pointer">高级：手动发送按键 / 原始输出</summary>
-          <div class="inline" style="margin:8px 0 6px">
-            <input id="ocKeys" placeholder="一般不用手填，向导里的按钮就够了">
+
+        <div class="step">
+          <div class="stepno">1</div>
+          <div class="stepbody">
+            <div class="steptitle">安装 OpenCode</div>
+            <div class="sub" id="ocEnv">检测中…</div>
+            <div class="row" style="margin:10px 0 0">
+              <button class="pri" onclick="ocAction('install')">一键安装 / 升级</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="step">
+          <div class="stepno">2</div>
+          <div class="stepbody">
+            <div class="steptitle">登录 OpenCode</div>
+            <div class="sub">免费模型需要登录后才可用；不登录会一直报 Free usage limit。</div>
+            <div class="row" style="margin:10px 0 0">
+              <button class="pri" onclick="ocAction('login')">开始登录</button>
+            </div>
+            <div id="ocGuide" style="margin-top:10px"></div>
+          </div>
+        </div>
+
+        <div class="step">
+          <div class="stepno">3</div>
+          <div class="stepbody">
+            <div class="steptitle">验证</div>
+            <div class="sub">用命令行方式真跑一句，通了就可以启用上游。</div>
+            <div class="row" style="margin:10px 0 0">
+              <button class="pri" onclick="ocAction('ping')">试一句</button>
+              <button onclick="ocAction('diagnose')">诊断</button>
+              <button onclick="ocAction('start')">启动服务</button>
+              <button onclick="ocAction('stop')">停止服务</button>
+            </div>
+          </div>
+        </div>
+
+        <details style="margin-top:6px">
+          <summary class="sub" style="cursor:pointer;padding:8px 0">高级设置（路径 / 端口 / 工作目录 / API Key）</summary>
+          <div style="margin-top:8px">
+            <div class="f2">
+              <div class="field"><label>二进制路径</label>
+                <input id="ocBin" placeholder="留空 = 自动查找"></div>
+              <div class="field"><label>端口</label>
+                <input id="ocPort" type="number" placeholder="4096"></div>
+            </div>
+            <div class="field"><label>工作目录</label>
+              <input id="ocWs" placeholder="留空 = 应用数据目录下 opencode-workspace">
+              <div class="hint">建议留空，空目录能避免它误动你的文件。</div></div>
+            <div class="field"><label>Console API Key（可选）</label>
+              <input id="ocKey" type="password" placeholder="留空 = 未设置">
+              <div class="hint">会以 <span class="mono">OPENCODE_API_KEY</span> 注入 opencode 进程。</div></div>
+            <label class="chk"><input id="ocAuto" type="checkbox"> 崩溃后自动重启</label>
+          </div>
+        </details>
+
+        <details style="margin-top:4px">
+          <summary class="sub" style="cursor:pointer;padding:8px 0">日志</summary>
+          <div class="sub" style="margin:8px 0 4px">启动输出</div>
+          <pre id="ocLog">（暂无日志）</pre>
+          <div class="sub" style="margin:10px 0 4px">登录原始输出</div>
+          <div class="inline" style="margin:0 0 6px">
+            <input id="ocKeys" placeholder="手动发送按键（一般用不到）">
             <button onclick="ocSendKeys()">发送</button>
             <button onclick="ocSendKeys('enter')">发送回车</button>
           </div>
-          <pre id="ocLogin">（还没有登录输出）</pre>
+          <pre id="ocLogin">（暂无）</pre>
+          <div class="sub" style="margin:10px 0 4px">opencode 自己的日志（provider 报错在这）</div>
+          <pre id="ocOwnLog">（暂无）</pre>
         </details>
-        <div class="sub" style="margin:10px 0 4px">opencode 自己的日志（provider 报错在这）</div>
-        <pre id="ocOwnLog">（暂无）</pre>
       </div>
-    </div>
 
     <!-- ===== 日志 ===== -->
     <div class="sect" data-sect="logs">
@@ -3317,10 +3349,21 @@ async function clearTok(){
 
 /* ---------- OpenCode 运行时 ---------- */
 function ocPaint(d){
-  const el = document.getElementById('ocState');
-  el.textContent = d.running ? ('运行中 pid ' + d.pid)
-                             : (d.installed ? '未运行' : '未安装');
-  el.className = 'tag ' + (d.running ? 'g' : (d.installed ? 'y' : 'd'));
+  const ls0 = d.login_state || {};
+  const logged = (ls0.state === 'done');
+  const setTag = function(id, text, cls){
+    const e = document.getElementById(id);
+    if(e){ e.textContent = text; e.className = 'tag ' + cls; }
+  };
+  setTag('ocTagInstall',
+         '安装 · ' + (d.installed ? (d.bin_version || '已装') : '未装'),
+         d.installed ? 'g' : 'd');
+  setTag('ocTagLogin',
+         '登录 · ' + (logged ? '已登录' : (ls0.state === 'idle' ? '未登录' : '进行中')),
+         logged ? 'g' : 'y');
+  setTag('ocTagRun',
+         '运行 · ' + (d.running ? ('pid ' + d.pid) : '未运行'),
+         d.running ? 'g' : 'd');
   document.getElementById('ocLog').textContent =
     (d.last_error ? ('[错误] ' + d.last_error + ' | ') : '') + (d.log || '（暂无日志）');
   const ol = document.getElementById('ocOwnLog');
