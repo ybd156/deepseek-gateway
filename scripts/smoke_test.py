@@ -695,6 +695,21 @@ def main() -> int:
             "strategy": "priority", "cooldown_seconds": 5,
             "providers": base_providers})
 
+
+        print("== 33. 日志能区分「对话」和「自检」==")
+        http("POST", base + "/admin/api/probe", {"name": "good"})
+        time.sleep(0.3)
+        code, _, txt = http("GET", base + "/admin/api/logs?kind=usage&limit=30")
+        rows2 = json.loads(txt).get("rows") or []
+        srcs = {r.get("source") for r in rows2}
+        check("probe" in srcs, "自检有单独标记", str(srcs))
+        check("chat" in srcs, "对话有单独标记", str(srcs))
+        probe_row = next((r for r in rows2 if r.get("source") == "probe"), {})
+        check(bool(probe_row.get("upstream_model")), "自检也记了上游模型",
+              str(probe_row.get("upstream_model")))
+        check("first_byte_ms" in probe_row, "自检也记了首字耗时",
+              str(probe_row.get("first_byte_ms")))
+
     finally:
         try:
             proc.terminate()
