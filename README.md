@@ -225,6 +225,22 @@ SOCKS5 由标准库自实现隧道，不依赖 PySocks。填完点旁边的「**
 **免密钥上游**：勾选卡片里的「免密钥」后，即使没有 Key 也会参与路由——本地 Ollama、vLLM、
 LM Studio 这类不需要鉴权的服务用这个。面板上密钥来源会显示为「免密钥」。
 
+### OpenCode 的两种调用方式
+
+`type=opencode` 的上游有两种接法，在卡片「opencode 调用方式」里选：
+
+| 方式 | 实际执行 | 说明 |
+|---|---|---|
+| **服务端 API**（默认） | `POST {base}/session/{id}/message` | 快，但免费池会判定为"外部调用"并限流 |
+| **命令行** | `opencode run --model … --agent plan "<prompt>"` | 走客户端本体，**可能绕过免费池限制**；每次起一个进程，略慢 |
+
+命令行方式每次请求都会在网关日志里打印实际执行的命令和输出，方便排查：
+
+```
+[opencode-cli] /path/opencode run --model deepseek-v4.1-flash-free --agent plan <prompt>
+[opencode-cli] rc=0 4.2s out='OK' err=''
+```
+
 > **OpenCode 免费模型的限制**：`opencode-free` 这类免费池只在 OpenCode 自己的界面里有效，
 > 无头调用（`opencode serve` + API）会被限流，服务端返回
 > `Free usage limit reached`。网关会识别这种情况并把该上游自动冷却 1 小时，
