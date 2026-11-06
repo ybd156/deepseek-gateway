@@ -28,6 +28,8 @@ import signal
 import socket
 import socketserver
 import sqlite3
+import subprocess
+import tempfile
 import threading
 import time
 import urllib.error
@@ -706,6 +708,7 @@ def load_config() -> None:
                 # type=opencode：驱动本地 opencode serve（见 opencode_upstream.py）
                 "type": str(it.get("type", "http") or "http").lower(),
                 "protocol": str(it.get("protocol", "") or "").lower(),
+                "opencode_mode": str(it.get("opencode_mode", "") or "server").lower(),
                 "opencode_provider": str(it.get("opencode_provider", "opencode") or "opencode"),
                 "opencode_agent": str(it.get("opencode_agent", "") or ""),
                 "opencode_tools": it.get("opencode_tools"),
@@ -1139,6 +1142,51 @@ ALT_PROTOCOLS = {
 }
 
 
+def call_opencode_cli(p: dict, payload: dict) -> tuple[dict, str]:
+    """走 `opencode run`（客户端本体），而不是 serve 的 HTTP API。"""
+    bin_path, ws, env = SUPERVISOR.cli_context()
+    if not bin_path:
+        raise ProviderError("没找到 opencode 可执行文件：先在设置页点「一键安装」")
+
+    prompt = render_prompt(payload)
+    model = pick_model(p, payload)
+    args = [bin_path, "run"]
+    if model:
+        args += ["--model", model]
+    agent = p.get("opencode_agent") or "plan"
+    if agent:
+        args += ["--agent", agent]
+    args.append(prompt)
+
+    print("[opencode-cli] " + " ".join(args[:-1]) + " <prompt>", flush=True)
+    t0 = time.time()
+    with tempfile.TemporaryFile() as fo, tempfile.TemporaryFile() as fe:
+        try:
+            rc = subprocess.call(args, stdout=fo, stderr=fe, env=env, cwd=ws,
+                                 timeout=p["timeout"])
+        except subprocess.TimeoutExpired:
+            raise ProviderError(
+                f"opencode run 超时（{p['timeout']}s）。"
+                f"可在 providers.json 里调大该上游的 timeout") from None
+        except Exception as exc:                    # noqa: BLE001
+            raise ProviderError(f"启动 opencode run 失败：{exc}") from None
+        fo.seek(0)
+        fe.seek(0)
+        out = fo.read().decode("utf-8", "ignore").strip()
+        err = fe.read().decode("utf-8", "ignore").strip()
+
+    sec = time.time() - t0
+    print(f"[opencode-cli] rc={rc} {sec:.1f}s out={out[:120]!r} err={err[:160]!r}",
+          flush=True)
+    if rc != 0:
+        raise ProviderError(f"opencode run 退出码 {rc}：{(err or out)[:300]}")
+    if not out:
+        raise ProviderError("opencode run 没有输出：" + (err[:200] or "（空）"))
+    tin = max(1, len(prompt) // 3)
+    tout = max(1, len(out) // 3)
+    return _oa_wrap(model, out, tin, tout), ""
+
+
 def call_provider(p: dict, payload: dict) -> tuple[dict, str]:
     """统一调用入口，返回 (OpenAI 形状的 dict, 警告信息)。
 
@@ -1146,6 +1194,8 @@ def call_provider(p: dict, payload: dict) -> tuple[dict, str]:
     type=opencode → 驱动本地 opencode serve（建会话→发消息→删会话）
     """
     if p["type"] == "opencode":
+        if (p.get("opencode_mode") or "server").lower() == "cli":
+            return call_opencode_cli(p, payload)
         SUPERVISOR.ensure()             # 没在跑就自动拉起（失败不影响下面报错）
         client = OpenCodeClient(
             base_url=p["base_url"], model_id=p["model"],
@@ -1714,6 +1764,25 @@ class Handler(BaseHTTPRequestHandler):
             t0 = time.time()
             print(f"[gateway] opencode 试一句：base={base} model={model} agent={agent}",
                   flush=True)
+            mode = (op or {}).get("opencode_mode") or "server"
+            if mode == "cli":
+                try:
+                    data, _w = call_opencode_cli(
+                        {**(op or {}), "timeout": 25},
+                        {"messages": [{"role": "user", "content": "回复两个字：OK"}],
+                         "model": model})
+                    text = str(data["choices"][0]["message"]["content"] or "")
+                    print(f"[gateway] opencode cli 试一句成功：{text[:60]}", flush=True)
+                    self.send_json(200, {**SUPERVISOR.status(), "ok": True,
+                                         "message": f"试通了（cli）：{text[:80]}",
+                                         "probe": {"mode": "cli", "text": text[:400]}})
+                except Exception as exc:            # noqa: BLE001
+                    print(f"[gateway] opencode cli 试一句失败：{exc}", flush=True)
+                    self.send_json(200, {**SUPERVISOR.status(), "ok": False,
+                                         "message": f"试失败（cli）：{str(exc)[:300]}",
+                                         "probe": {"mode": "cli", "error": str(exc)[:400]}})
+                return
+
             client = OpenCodeClient(base_url=base, model_id=model,
                                     provider_id=prov, agent=agent, timeout=25)
             try:
@@ -2455,7 +2524,8 @@ async function load(){
               + '<span class="sub"> / ' + p.free_quota_tokens.toLocaleString() + '</span>';
       } else { quota = '<span class="sub">免费不限</span>'; }
       const typeTag = p.type === 'opencode'
-        ? ' <span class="tag d">opencode</span>'
+        ? (' <span class="tag d">opencode' +
+           ((p.opencode_mode === 'cli') ? '·cli' : '') + '</span>')
         : (p.protocol ? ' <span class="tag d">' + esc(p.protocol) + '</span>' : '');
       const btn = p.enabled
         ? '<button onclick="tog(\\'' + p.name + '\\',false)">停用</button>'
@@ -2761,6 +2831,13 @@ function provCard(p, i){
     + '<option value="anthropic"' + (p.protocol === 'anthropic' ? ' selected' : '') + '>Anthropic Messages</option>'
     + '<option value="gemini"' + (p.protocol === 'gemini' ? ' selected' : '') + '>Google Gemini</option>'
     + '</select><div class="hint">类型选 opencode 时忽略这一项</div></div>'
+    + '</div>'
+    + '<div class="field"><label>opencode 调用方式</label><select data-f="opencode_mode">'
+    + '<option value="server"' + ((p.opencode_mode || 'server') !== 'cli' ? ' selected' : '') + '>服务端 API（opencode serve）</option>'
+    + '<option value="cli"' + (p.opencode_mode === 'cli' ? ' selected' : '') + '>命令行（opencode run）</option>'
+    + '</select><div class="hint">只有类型选 opencode 时有效。cli 走客户端本体，'
+    + '可能绕过「免费模型只在 OpenCode 内可用」的限制</div></div>'
+    + '<div class="f2">'
     + '</div>'
     + '<div class="f2">'
     + '<div class="field"><label>量化</label>'
