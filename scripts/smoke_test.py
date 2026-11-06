@@ -456,6 +456,61 @@ def main() -> int:
         check(code == 400 and "图片" in msg2, "不支持视觉时明确拒绝",
               str(code) + " " + msg2[:60])
 
+
+        print("== 21. 点名不存在的模型：明确报错，不换默认 ==")
+        code, _, txt = http("POST", base + "/v1/chat/completions",
+                            {"model": "根本不存在的模型",
+                             "messages": [{"role": "user", "content": "x"}]},
+                            headers={"Authorization": "Bearer " + key})
+        m3 = ""
+        try:
+            m3 = str(json.loads(txt)["error"]["message"])
+        except Exception:
+            pass
+        check(code == 400, "返回 400 而不是偷偷用默认", str(code))
+        check("没有上游支持模型" in m3, "说清楚是模型问题", m3[:70])
+        check(MODEL in m3, "列出可用模型", m3[:110])
+
+        print("== 22. 点名列表里有的模型：必须发这个 ==")
+        http("POST", base + "/admin/api/config", {
+            "strategy": "priority", "cooldown_seconds": 5,
+            "providers": [
+                {"name": "two-model", "enabled": True, "priority": 1,
+                 "base_url": f"http://127.0.0.1:{UP_PORT}",
+                 "model": MODEL, "models": ["another-model-b"],
+                 "api_key": "k"}]})
+        code, hdrs, txt = http("POST", base + "/v1/chat/completions",
+                               {"model": "another-model-b",
+                                "messages": [{"role": "user", "content": "选我"}]},
+                               headers={"Authorization": "Bearer " + key})
+        body = json.loads(txt) if code == 200 else {}
+        got_model = str(body.get("model") or "")
+        check(code == 200, "请求成功", str(code))
+        check(got_model == "another-model-b", "响应回显点名的模型", got_model)
+        check(hdrs.get("X-Gateway-Upstream-Model") == "another-model-b",
+              "上游真的收到这个模型名",
+              str(hdrs.get("X-Gateway-Upstream-Model")))
+
+        print("== 23. 勾了透传就照发 ==")
+        http("POST", base + "/admin/api/config", {
+            "strategy": "priority", "cooldown_seconds": 5,
+            "providers": [
+                {"name": "passer", "enabled": True, "priority": 1,
+                 "base_url": f"http://127.0.0.1:{UP_PORT}",
+                 "model": MODEL, "model_passthrough": True,
+                 "api_key": "k"}]})
+        code, hdrs, txt = http("POST", base + "/v1/chat/completions",
+                               {"model": "any-name-ok",
+                                "messages": [{"role": "user", "content": "p"}]},
+                               headers={"Authorization": "Bearer " + key})
+        check(code == 200, "透传成功", str(code))
+        check(hdrs.get("X-Gateway-Upstream-Model") == "any-name-ok",
+              "原样发给上游", str(hdrs.get("X-Gateway-Upstream-Model")))
+
+        http("POST", base + "/admin/api/config", {
+            "strategy": "priority", "cooldown_seconds": 5,
+            "providers": base_providers})
+
     finally:
         try:
             proc.terminate()
