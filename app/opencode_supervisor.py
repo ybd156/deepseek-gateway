@@ -122,6 +122,56 @@ class OpenCodeSupervisor:
     def is_running(self) -> bool:
         return self.proc is not None and self.proc.poll() is None
 
+    def login_log_path(self) -> str:
+        return os.path.join(self.data_dir, "opencode-login.log")
+
+    def login_log(self, lines: int = 80) -> str:
+        try:
+            with open(self.login_log_path(), "rb") as fh:
+                fh.seek(0, os.SEEK_END)
+                size = fh.tell()
+                fh.seek(max(0, size - 64 * 1024))
+                text = fh.read().decode("utf-8", "ignore")
+            return chr(10).join(text.splitlines()[-lines:])
+        except FileNotFoundError:
+            return "（还没有登录输出）"
+        except Exception as exc:                    # noqa: BLE001
+            return f"（读取失败：{exc}）"
+
+    def start_login(self, provider: str = "") -> tuple:
+        """在后台跑 `opencode auth login`，把授权链接/验证码写进日志。
+
+        auth login 需要交互式终端，所以用 script(1) 造一个伪终端。
+        """
+        bin_path = self.resolve_bin()
+        if not bin_path:
+            return False, "没找到 opencode，先点「一键安装」"
+        _, ws, env = self.cli_context()
+        log_path = self.login_log_path()
+        try:
+            with open(log_path, "w", encoding="utf-8") as fh:
+                fh.write("===== 开始登录 opencode =====" + chr(10))
+        except Exception as exc:                    # noqa: BLE001
+            return False, f"写日志失败：{exc}"
+
+        inner = bin_path + " auth login"
+        if provider:
+            inner += " " + provider
+        # Linux 上 script 可以造伪终端；没有就用普通管道（可能拿不到交互）
+        script_bin = shutil.which("script")
+        if script_bin:
+            cmd = [script_bin, "-qec", inner, "/dev/null"]
+        else:
+            cmd = ["bash", "-lc", inner]
+        try:
+            with open(log_path, "ab") as lf:
+                subprocess.Popen(cmd, stdout=lf, stderr=subprocess.STDOUT,
+                                 stdin=subprocess.DEVNULL, env=env, cwd=ws,
+                                 start_new_session=True)
+            return True, "已在后台启动登录，稍等 2 秒看「登录输出」里的链接/验证码"
+        except Exception as exc:                    # noqa: BLE001
+            return False, f"启动失败：{exc}"
+
     def cli_context(self) -> tuple:
         """给 `opencode run` 用的 (二进制, 工作目录, 环境变量)。"""
         bin_path = self.resolve_bin()
@@ -216,6 +266,7 @@ class OpenCodeSupervisor:
             "workspace": str(opts.get("workspace") or ""),
             "autostart": bool(opts.get("autostart", True)),
             "oc_logs": self.own_logs(120),
+            "login_log": self.login_log(60),
             "uptime": int(time.time() - self.started_at) if self.is_running() else 0,
             "restarts": self.restarts,
             "last_error": self.last_error,
