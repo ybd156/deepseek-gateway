@@ -1,5 +1,8 @@
 # AI 网关（飞牛 fnOS 应用）
 
+[![repo](https://img.shields.io/badge/GitHub-ybd156%2Ffnos--ai--gateway-2563eb)](
+https://github.com/ybd156/fnos-ai-gateway)　开发者 [@ybd156](https://github.com/ybd156)　MIT
+
 把多个模型服务商聚合成一个 **OpenAI 兼容**接口，跑在自己的 NAS 上。
 纯 Python 标准库，零第三方依赖，零 Docker。
 
@@ -35,7 +38,7 @@
 
 ## 安装
 
-1. 从 [Releases](../../releases) 下载 `.fpk`
+1. 从 [Releases](https://github.com/ybd156/fnos-ai-gateway/releases) 下载 `.fpk`
 2. 飞牛 → 应用中心 → 手动安装 → 选文件
 3. 打开桌面图标，或访问 `http://<飞牛IP>:18787/admin`
 
