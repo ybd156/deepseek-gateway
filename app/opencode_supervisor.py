@@ -102,6 +102,45 @@ class OpenCodeSupervisor:
     def is_running(self) -> bool:
         return self.proc is not None and self.proc.poll() is None
 
+    def cli_context(self) -> tuple:
+        """给 `opencode run` 用的 (二进制, 工作目录, 环境变量)。"""
+        bin_path = self.resolve_bin()
+        opts = self.get_opts() or {}
+        ws = str(opts.get("workspace") or os.path.join(self.data_dir, "opencode-workspace"))
+        home = os.path.join(self.data_dir, "home")
+        for d in (ws, home, os.path.join(home, ".config"),
+                  os.path.join(home, ".local", "share"),
+                  os.path.join(self.data_dir, "npm-cache")):
+            try:
+                os.makedirs(d, exist_ok=True)
+            except Exception:
+                pass
+        cfg_path = os.path.join(ws, "opencode.json")
+        if not os.path.exists(cfg_path):
+            try:
+                with open(cfg_path, "w", encoding="utf-8") as fh:
+                    json.dump({"$schema": "https://opencode.ai/config.json",
+                               "permission": {"edit": "allow", "bash": "allow",
+                                              "webfetch": "allow"}},
+                              fh, ensure_ascii=False, indent=2)
+            except Exception:
+                pass
+
+        env = dict(os.environ)
+        extra = []
+        node = self.which("node")
+        if node:
+            extra.append(os.path.dirname(node))
+        extra.extend(self.EXTRA_BIN_DIRS)
+        if bin_path:
+            extra.append(os.path.dirname(bin_path))
+        env["PATH"] = ":".join(extra + [env.get("PATH", "")])
+        env["HOME"] = home
+        env["XDG_CONFIG_HOME"] = os.path.join(home, ".config")
+        env["XDG_DATA_HOME"] = os.path.join(home, ".local", "share")
+        env["XDG_CACHE_HOME"] = os.path.join(self.data_dir, "npm-cache")
+        return bin_path, ws, env
+
     def own_logs(self, lines: int = 150) -> str:
         """opencode 自己写的日志（provider 报错都在这里）。"""
         dirs = [
