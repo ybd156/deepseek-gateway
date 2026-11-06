@@ -72,11 +72,12 @@ def opencode_opts() -> dict:
     except Exception:
         port = 4096
     enabled = any(p["type"] == "opencode" and p["enabled"] for p in PROVIDERS)
+    ws_default = os.path.join(DATA_DIR, "opencode-workspace")
     return {
         "bin": str(data.get("opencode_bin") or ""),
         "port": port,
-        "workspace": str(data.get("opencode_workspace")
-                         or os.path.join(DATA_DIR, "opencode-workspace")),
+        "workspace": str(data.get("opencode_workspace") or ws_default),
+        "workspace_default": ws_default,
         "autostart": bool(data.get("opencode_autostart", True)),
         "enabled": enabled,
     }
@@ -249,7 +250,7 @@ def load_runtime() -> None:
         token = GATEWAY_TOKEN
 
     RUNTIME.update(strategy=strategy, cooldown=max(1, cooldown), gateway_token=token,
-                   proxy=str(data.get("proxy") or os.getenv("HTTP_PROXY") or "").strip())
+                   proxy=str(data.get("proxy") or "").strip())
 
 
 def save_runtime(patch: dict) -> None:
@@ -502,6 +503,39 @@ def tokens_payload() -> dict:
         "master": has_master,
         "open_mode": (not has_master and not enabled_tokens),
     }
+
+
+def save_one_provider(raw: dict) -> dict:
+    """只写回一个上游（其它卡片不动）。"""
+    name = str(raw.get("name") or "").strip()
+    if not name:
+        raise ValueError("名称不能为空")
+    item = {k: v for k, v in raw.items() if not str(k).startswith("_")}
+    item["name"] = name
+    item.setdefault("base_url", "")
+    item.setdefault("model", "")
+
+    src = str(raw.get("_source") or "main")
+    base_dir = os.path.dirname(os.path.abspath(CONFIG_PATH))
+    path = CONFIG_PATH if src == "main" else os.path.join(base_dir, "providers.d", src)
+    try:
+        with open(path, encoding="utf-8") as fh:
+            existing = json.load(fh) or {}
+    except Exception:
+        existing = {}
+
+    provs = list(existing.get("providers") or [])
+    for i, p in enumerate(provs):
+        if str(p.get("name")) == name:
+            provs[i] = item
+            break
+    else:
+        provs.append(item)
+
+    existing["providers"] = provs
+    atomic_write_json(path, existing)
+    load_config()
+    return config_snapshot()
 
 
 def provider_key_source(p: dict, sec: dict | None = None) -> str:
@@ -1011,7 +1045,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json(200, {"ok": True, "providers": len(PROVIDERS)})
         elif path in ("/", "/admin", "/admin/"):
             self._send(200, STATUS_HTML.encode("utf-8"), "text/html; charset=utf-8")
-        elif path in ("/settings", "/settings/"):
+        elif path == "/settings" or path.startswith("/settings/"):
             self._send(200, SETTINGS_HTML.encode("utf-8"), "text/html; charset=utf-8")
         elif path == "/admin/api/config":
             if not authorized(self):
@@ -1077,6 +1111,8 @@ class Handler(BaseHTTPRequestHandler):
             self.handle_discover()
         elif path == "/admin/api/verify-key":
             self.handle_verify_key()
+        elif path == "/admin/api/save-provider":
+            self.handle_save_provider()
         elif path == "/admin/api/reload":
             if not authorized(self):
                 self.send_json(401, {"error": "unauthorized"})
@@ -1147,6 +1183,33 @@ class Handler(BaseHTTPRequestHandler):
                 "ms": int((time.time() - t0) * 1000),
                 "error": err_text(exc)[:300],
             })
+
+    def handle_save_provider(self) -> None:
+        """保存单张上游卡片。"""
+        if not authorized(self):
+            self.send_json(401, {"error": "unauthorized"})
+            return
+        if not is_admin(self):
+            self.send_json(403, {"ok": False, "error": "只有管理员能改配置"})
+            return
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+            body = json.loads(self.rfile.read(length) or b"{}")
+        except Exception:
+            self.send_json(400, {"ok": False, "error": "bad request"})
+            return
+        raw = body.get("provider") or {}
+        if not isinstance(raw, dict):
+            self.send_json(400, {"ok": False, "error": "provider 必须是对象"})
+            return
+        try:
+            for env, val in (body.get("secrets") or {}).items():
+                save_secret(str(env), str(val or ""))
+            snap = save_one_provider(raw)
+        except Exception as exc:                    # noqa: BLE001
+            self.send_json(400, {"ok": False, "error": str(exc)})
+            return
+        self.send_json(200, {"ok": True, **snap})
 
     def handle_verify_key(self) -> None:
         """拿一把 Key 来验：是主口令？是哪个令牌？有没有被停用/超额？"""
@@ -1794,16 +1857,23 @@ _CSS = """
   .r{background:#fdecec;color:var(--err)}
   .d{background:#eef1f5;color:var(--dim)}
   .mono{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px}
+  .nowrap{white-space:nowrap}
+  .clip{max-width:250px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .msg{color:var(--acc);font-size:12px}
   .err{color:var(--err);font-size:11px;max-width:240px;overflow:hidden;
        text-overflow:ellipsis;white-space:nowrap;display:inline-block}
+  .sect{display:none}
+  .sect.on{display:block}
   .pgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(380px,1fr));gap:14px}
   .provcard{background:#fff;border:1px solid var(--line);border-radius:12px;padding:14px;
         box-shadow:0 1px 2px rgba(16,24,40,.04)}
   .phd{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:12px}
+  .phd>span{flex:none;white-space:nowrap}
+  .phd>span a{font-size:12px}
   .phd .nm{font-weight:700;flex:1}
   .f2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
-  .chk{display:flex;gap:6px;align-items:center;font-size:12px;color:#374151;white-space:nowrap}
+  .chk{display:flex;gap:6px;align-items:center;font-size:12px;color:#374151;
+       white-space:nowrap;flex:none}
   pre{background:#0f172a;color:#e2e8f0;border-radius:10px;padding:12px;font-size:11px;
       line-height:1.55;max-height:220px;overflow:auto;margin:10px 0 0}
   @media (max-width:760px){
@@ -1814,7 +1884,7 @@ _CSS = """
 """
 
 _COMMON_JS = """
-const BASE = (location.pathname.replace(/\\/(admin|settings)\\/?$/, '') || '').replace(/\\/$/, '');
+const BASE = (location.pathname.replace(/\/(admin|settings)(\/[^\/]*)?\/?$/, '') || '').replace(/\/$/, '');
 const tok = () => localStorage.getItem('gw_token') || '';
 const H = () => ({'Authorization':'Bearer '+tok(),'Content-Type':'application/json'});
 function msg(t){ const e=document.getElementById('msg'); if(e) e.textContent = t; }
@@ -1859,20 +1929,52 @@ function copyEp(id, label){
   copyText(txt, label);
 }
 document.querySelectorAll('[data-nav]').forEach(a => { a.href = BASE + a.dataset.nav; });
+
+function currentSect(){
+  const pth = location.pathname.replace(/\/$/, '');
+  if(pth.endsWith('/settings/providers')) return 'providers';
+  if(pth.endsWith('/settings/tokens')) return 'tokens';
+  if(pth.endsWith('/settings/opencode')) return 'opencode';
+  if(pth.endsWith('/settings')) return 'global';
+  return 'admin';
+}
+
+function applySect(){
+  const cur = currentSect();
+  document.querySelectorAll('.nav a[data-sect]').forEach(function(a){
+    a.classList.toggle('on', a.dataset.sect === cur);
+  });
+  document.querySelectorAll('.sect').forEach(function(el){
+    el.classList.toggle('on', el.dataset.sect === cur);
+  });
+  const titles = {global:'全局设置', providers:'上游', tokens:'访问令牌', opencode:'OpenCode 运行时'};
+  const subs = {global:'口令、路由策略、冷却与代理',
+                providers:'每个上游一张卡片，可挂多个模型',
+                tokens:'给别人用的独立 Key，可单独停用/限额',
+                opencode:'本地 opencode serve 的安装与启停'};
+  const t = document.getElementById('secTitle');
+  const sb = document.getElementById('secSub');
+  if(t && titles[cur]) t.textContent = titles[cur];
+  if(sb && subs[cur]) sb.textContent = subs[cur];
+}
+applySect();
 """
 
 _SIDE = """
   <aside class="side">
     <div class="brand">DeepSeek 网关<small>多上游聚合 · OpenAI 兼容</small></div>
     <nav class="nav">
-      <a data-nav="/admin" class="NAV_ADMIN">概览</a>
-      <a data-nav="/settings" class="NAV_SET">设置</a>
-      <div class="sep">快捷</div>
-      <a href="#" onclick="location.href=BASE+'/admin';return false">运行状态</a>
-      <a href="#" onclick="location.href=BASE+'/settings';return false">上游与密钥</a>
+      <a data-nav="/admin" data-sect="admin">概览</a>
+      <div class="sep">设置</div>
+      <a data-nav="/settings" data-sect="global">全局</a>
+      <a data-nav="/settings/providers" data-sect="providers">上游</a>
+      <a data-nav="/settings/tokens" data-sect="tokens">访问令牌</a>
+      <a data-nav="/settings/opencode" data-sect="opencode">OpenCode</a>
     </nav>
   </aside>
 """
+
+
 
 _STATUS_BODY = """
 <div class="layout">
@@ -2047,103 +2149,119 @@ _SETTINGS_BODY = """
 <div class="layout">
 NAV
   <main class="main">
-    <h1>设置</h1>
-    <div class="sub">改完点「保存全部」立即生效，不用重启。</div>
+    <h1 id="secTitle">设置</h1>
+    <div class="sub" id="secSub">改完点「保存全部」立即生效，不用重启。</div>
 
     <div class="row">
       <button class="pri" onclick="save()">保存全部</button>
-      <button onclick="addPreset('openai')">+ OpenAI 兼容接口</button>
-      <button onclick="addPreset('openrouter')">+ OpenRouter</button>
-      <button onclick="addPreset('ollama')">+ 本地 Ollama</button>
-      <button onclick="addProv()">+ 空白上游</button>
       <button onclick="loadCfg()">重新载入</button>
       <span class="msg" id="msg"></span>
     </div>
 
-    <h2>全局</h2>
-    <div class="card">
-      <div class="f2">
-        <div class="field"><label>访问口令</label>
-          <div class="inline"><input id="setTok" type="password" placeholder="留空 = 免口令">
-            <button onclick="clearTok()">清除</button></div>
-          <div class="hint">给自己用的主口令。给别人用请到下面「访问令牌」里建独立 Key。</div></div>
-        <div class="field"><label>失败冷却（秒）</label>
-          <input id="setCd" type="number" min="1" max="3600">
-          <div class="hint">某个上游失败后，等多久再试它。</div></div>
-      </div>
-      <div class="field"><label>排序策略</label>
-        <select id="setStrat">
-          <option value="priority">稳定优先（按优先级从上到下）</option>
-          <option value="cheapest">省钱优先（按价格从低到高）</option>
-        </select></div>
-      <div class="field" style="margin-bottom:0"><label>全局代理</label>
-        <div class="inline">
-          <select id="setProxyScheme" style="max-width:190px">
-            <option value="">不用代理</option>
-            <option value="http">HTTP</option>
-            <option value="https">HTTPS</option>
-            <option value="socks5">SOCKS5</option>
-            <option value="socks5h">SOCKS5（代理解析域名）</option>
-          </select>
-          <input id="setProxyAddr" placeholder="主机:端口，如 192.168.1.10:7890">
-          <button onclick="testProxy()">测试</button>
+    <!-- ===== 全局 ===== -->
+    <div class="sect" data-sect="global">
+      <h2>访问与路由</h2>
+      <div class="card">
+        <div class="f2">
+          <div class="field"><label>访问口令</label>
+            <div class="inline"><input id="setTok" type="password" placeholder="留空 = 免口令">
+              <button onclick="clearTok()">清除</button></div>
+            <div class="hint">给自己用的主口令。给别人用请到「访问令牌」建独立 Key。</div></div>
+          <div class="field"><label>失败冷却（秒）</label>
+            <input id="setCd" type="number" min="1" max="3600">
+            <div class="hint">某个上游失败后，等多久再试它。</div></div>
         </div>
-        <div class="hint" id="proxyMsg">只有需要代理的上游才走它；国内直连的平台建议在卡片里单独留空。</div></div>
-    </div>
-
-    <h2>OpenCode 运行时（给 type=opencode 的上游用）</h2>
-    <div class="card">
-      <div class="phd"><span class="nm">opencode serve</span>
-        <span><span id="ocState" class="tag d">…</span></span></div>
-      <div class="hint" id="ocEnv" style="margin-bottom:12px">检测中…</div>
-      <div class="f2">
-        <div class="field"><label>二进制路径</label>
-          <input id="ocBin" placeholder="留空 = 自动查找"></div>
-        <div class="field"><label>端口</label>
-          <input id="ocPort" type="number" placeholder="4096"></div>
-      </div>
-      <div class="field"><label>工作目录</label>
-        <input id="ocWs" placeholder="留空 = 应用数据目录下 opencode-workspace">
-        <div class="hint">建议留空。它是个编码 Agent，空目录能避免误动你的文件。</div></div>
-      <div class="row" style="margin-bottom:0">
-        <label class="chk"><input id="ocAuto" type="checkbox"> 崩溃后自动重启</label>
-        <span style="flex:1"></span>
-        <button onclick="ocAction('install')">一键安装</button>
-        <button onclick="ocAction('start')">启动</button>
-        <button onclick="ocAction('stop')">停止</button>
-        <button onclick="ocAction('diagnose')">诊断</button>
-        <button onclick="ocRefresh()">刷新</button>
-      </div>
-      <pre id="ocLog">（暂无日志）</pre>
-    </div>
-
-    <h2>访问令牌（给别人用这个网关时）</h2>
-    <div class="card">
-      <div class="hint" id="tokHint" style="margin-bottom:10px">…</div>
-      <div class="inline" style="margin-bottom:8px">
-        <input id="verifyKey" placeholder="粘贴一把 Key 来验证（排查 401 用）">
-        <button onclick="verifyKey()">验证 Key</button>
-        <span class="msg" id="verifyMsg"></span>
-      </div>
-      <div class="inline" style="margin-bottom:12px">
-        <input id="newTokName" placeholder="备注名，如 小明的笔记本">
-        <input id="newTokQuota" type="number" placeholder="额度 tokens（0 = 不限）" style="max-width:210px">
-        <button class="pri" onclick="createTok()">新建令牌</button>
-        <button onclick="loadTokens()">刷新</button>
-      </div>
-      <div style="overflow-x:auto">
-        <table style="min-width:640px">
-          <thead><tr><th>备注</th><th>Key</th><th>已用 / 额度</th><th>状态</th><th>操作</th></tr></thead>
-          <tbody id="tokBody"></tbody>
-        </table>
+        <div class="field"><label>排序策略</label>
+          <select id="setStrat">
+            <option value="priority">稳定优先（按优先级从上到下）</option>
+            <option value="cheapest">省钱优先（按价格从低到高）</option>
+          </select></div>
+        <div class="field" style="margin-bottom:0"><label>全局代理</label>
+          <div class="inline">
+            <select id="setProxyScheme" style="max-width:190px">
+              <option value="">不用代理</option>
+              <option value="http">HTTP</option>
+              <option value="https">HTTPS</option>
+              <option value="socks5">SOCKS5</option>
+              <option value="socks5h">SOCKS5（代理解析域名）</option>
+            </select>
+            <input id="setProxyAddr" placeholder="主机:端口，如 192.168.1.10:7890">
+            <button onclick="testProxy()">测试</button>
+          </div>
+          <div class="hint" id="proxyMsg">只有需要代理的上游才走它；国内直连的平台建议在卡片里单独留空。</div></div>
       </div>
     </div>
 
-    <h2>上游（提供模型的服务商）</h2>
-    <div class="grid pgrid" id="grid"></div>
+    <!-- ===== 上游 ===== -->
+    <div class="sect" data-sect="providers">
+      <h2>上游（提供模型的服务商）</h2>
+      <div class="row" style="margin-top:0">
+        <button onclick="addPreset('openai')">+ OpenAI 兼容接口</button>
+        <button onclick="addPreset('openrouter')">+ OpenRouter</button>
+        <button onclick="addPreset('ollama')">+ 本地 Ollama</button>
+        <button onclick="addProv()">+ 空白上游</button>
+      </div>
+      <div class="grid pgrid" id="grid"></div>
+    </div>
+
+    <!-- ===== 访问令牌 ===== -->
+    <div class="sect" data-sect="tokens">
+      <h2>访问令牌（给别人用这个网关时）</h2>
+      <div class="card">
+        <div class="hint" id="tokHint" style="margin-bottom:10px">…</div>
+        <div class="inline" style="margin-bottom:8px">
+          <input id="verifyKey" placeholder="粘贴一把 Key 来验证（排查 401 用）">
+          <button onclick="verifyKey()">验证 Key</button>
+          <span class="msg" id="verifyMsg"></span>
+        </div>
+        <div class="inline" style="margin-bottom:12px">
+          <input id="newTokName" placeholder="备注名，如 小明的笔记本">
+          <input id="newTokQuota" type="number" placeholder="额度 tokens（0 = 不限）" style="max-width:210px">
+          <button class="pri" onclick="createTok()">新建令牌</button>
+          <button onclick="loadTokens()">刷新</button>
+        </div>
+        <div style="overflow-x:auto">
+          <table style="min-width:640px">
+            <thead><tr><th>备注</th><th>Key</th><th>已用 / 额度</th><th>状态</th><th>操作</th></tr></thead>
+            <tbody id="tokBody"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== OpenCode ===== -->
+    <div class="sect" data-sect="opencode">
+      <h2>OpenCode 运行时（给 type=opencode 的上游用）</h2>
+      <div class="card">
+        <div class="phd"><span class="nm">opencode serve</span>
+          <span><span id="ocState" class="tag d">…</span></span></div>
+        <div class="hint" id="ocEnv" style="margin-bottom:12px">检测中…</div>
+        <div class="f2">
+          <div class="field"><label>二进制路径</label>
+            <input id="ocBin" placeholder="留空 = 自动查找"></div>
+          <div class="field"><label>端口</label>
+            <input id="ocPort" type="number" placeholder="4096"></div>
+        </div>
+        <div class="field"><label>工作目录</label>
+          <input id="ocWs" placeholder="留空 = 应用数据目录下 opencode-workspace">
+          <div class="hint">建议留空。它是个编码 Agent，空目录能避免误动你的文件。</div></div>
+        <div class="row" style="margin-bottom:0">
+          <label class="chk"><input id="ocAuto" type="checkbox"> 崩溃后自动重启</label>
+          <span style="flex:1"></span>
+          <button onclick="ocAction('install')">一键安装</button>
+          <button onclick="ocAction('start')">启动</button>
+          <button onclick="ocAction('stop')">停止</button>
+          <button onclick="ocAction('diagnose')">诊断</button>
+          <button onclick="ocRefresh()">刷新</button>
+        </div>
+        <pre id="ocLog">（暂无日志）</pre>
+      </div>
+    </div>
   </main>
 </div>
 """
+
+
 
 _SETTINGS_JS = """
 let CFG = null;
@@ -2227,7 +2345,7 @@ function provCard(p, i){
     + '</div></div>'
 
     + '<div class="field"><label>免费额度（tokens）</label><div class="inline">'
-    + '<input type="number" data-f="free_quota_tokens" value="' + (p.free_quota_tokens || 0) + '">'
+    + '<input type="number" data-f="free_quota_tokens" value="' + (p.free_quota_tokens || 0) + '" style="max-width:190px">'
     + '<label class="chk"><input type="checkbox" data-f="free_only"'
     + (p.free_only ? ' checked' : '') + '> 免费上游</label>'
     + '</div><div class="hint">0 = 不限。填了额度，用尽后自动停用，不会悄悄转成付费。</div></div>'
@@ -2251,11 +2369,12 @@ function provCard(p, i){
     + '<div class="field"><label>备注</label>'
     + '<input data-f="note" value="' + esc(p.note) + '"></div>'
 
-    + '<div class="field" style="margin-bottom:0;display:flex;gap:10px;align-items:center;flex-wrap:wrap">'
+    + '<div class="field" style="margin-bottom:0;display:flex;gap:8px;align-items:center;flex-wrap:wrap">'
     + '<label class="chk"><input type="checkbox" data-f="enabled"' + (p.enabled ? ' checked' : '') + '> 启用</label>'
     + '<label class="chk"><input type="checkbox" data-f="no_auth"' + (p.no_auth ? ' checked' : '') + '> 免密钥</label>'
     + '<label class="chk"><input type="checkbox" data-f="strict_model"' + (p.strict_model ? ' checked' : '') + '> 严格校验</label>'
     + '<span style="flex:1"></span>'
+    + '<button class="pri" onclick="saveOne(' + i + ')">保存这张</button>'
     + '<button onclick="probeOne(\\'' + esc(p.name) + '\\')">自检</button>'
     + '<button class="danger" onclick="delProv(' + i + ')">删除</button>'
     + '</div>'
@@ -2274,7 +2393,13 @@ function render(){
   const oc = CFG.opencode || {};
   document.getElementById('ocPort').value = oc.port || 4096;
   document.getElementById('ocBin').value = oc.bin || '';
-  document.getElementById('ocWs').value = oc.workspace || '';
+  const wsEl = document.getElementById('ocWs');
+  if(oc.workspace && oc.workspace !== oc.workspace_default){
+    wsEl.value = oc.workspace;
+  } else {
+    wsEl.value = '';
+    wsEl.placeholder = '默认：' + (oc.workspace_default || '应用数据目录下 opencode-workspace');
+  }
   document.getElementById('ocAuto').checked = oc.autostart !== false;
   ocRefresh();
 }
@@ -2287,32 +2412,55 @@ async function loadCfg(){
   }catch(e){ if(e.message !== 'unauthorized') msg('载入失败：' + e.message); }
 }
 
-function collect(){
+function readCard(el){
   // 以原始配置为底，只覆盖界面上改过的字段——避免把 extra / timeout / opencode_* 丢掉
-  const providers = [...document.querySelectorAll('.provcard')].map(el => {
-    const idx = Number(el.dataset.i);
-    const src = CFG.providers[idx] || {};
-    const o = Object.assign({}, src);
-    delete o._has_key;
-    delete o._key_source;
-    el.querySelectorAll('[data-f]').forEach(inp => {
-      const f = inp.dataset.f;
-      if(inp.type === 'checkbox') o[f] = inp.checked;
-      else if(f === 'models'){
-        o[f] = String(inp.value || '').split(',').map(function(x){ return x.trim(); })
-                 .filter(function(x){ return x; });
-      }
-      else if(inp.type === 'number') o[f] = inp.value === '' ? 0 : Number(inp.value);
-      else o[f] = inp.value;
-    });
-    o._source = src._source || 'main';
-    return o;
+  const idx = Number(el.dataset.i);
+  const src = CFG.providers[idx] || {};
+  const o = Object.assign({}, src);
+  delete o._has_key;
+  delete o._key_source;
+  el.querySelectorAll('[data-f]').forEach(inp => {
+    const f = inp.dataset.f;
+    if(inp.type === 'checkbox') o[f] = inp.checked;
+    else if(f === 'models'){
+      o[f] = String(inp.value || '').split(',').map(function(x){ return x.trim(); })
+               .filter(function(x){ return x; });
+    }
+    else if(inp.type === 'number') o[f] = inp.value === '' ? 0 : Number(inp.value);
+    else o[f] = inp.value;
   });
-  const secrets = {};
-  document.querySelectorAll('.provcard .kval').forEach(inp => {
+  o._source = src._source || 'main';
+  return o;
+}
+
+function cardSecrets(el){
+  const out = {};
+  el.querySelectorAll('.kval').forEach(inp => {
     const v = (inp.value || '').trim();
-    const env = inp.dataset.env;
-    if(v && env) secrets[env] = v;
+    if(v && inp.dataset.env) out[inp.dataset.env] = v;
+  });
+  return out;
+}
+
+async function saveOne(idx){
+  const el = document.querySelector('.provcard[data-i="' + idx + '"]');
+  if(!el){ msg('找不到这张卡片'); return; }
+  const o = readCard(el);
+  if(!String(o.name || '').trim()){ msg('名称不能为空'); return; }
+  msg('保存中：' + o.name + ' …');
+  try{
+    const d = await api('/admin/api/save-provider', {method:'POST',
+      body: JSON.stringify({provider: o, secrets: cardSecrets(el)})});
+    if(d.ok){ CFG = d; render(); msg('已保存上游：' + o.name + '（其它卡片未改动）'); }
+    else { msg('保存失败：' + (d.error || '')); }
+  }catch(e){ msg('保存失败：' + e.message); }
+}
+
+function collect(){
+  const providers = [...document.querySelectorAll('.provcard')].map(readCard);
+  const secrets = {};
+  document.querySelectorAll('.provcard').forEach(el => {
+    Object.assign(secrets, cardSecrets(el));
   });
   const sc = document.getElementById('setProxyScheme').value;
   const ad = (document.getElementById('setProxyAddr').value || '').trim();
