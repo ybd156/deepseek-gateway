@@ -392,7 +392,8 @@ def init_db() -> None:
                cache_hit INTEGER DEFAULT 0, cache_miss INTEGER DEFAULT 0,
                client_ip TEXT DEFAULT '', user_agent TEXT DEFAULT '',
                effort TEXT DEFAULT '', upstream_model TEXT DEFAULT '',
-               request_id TEXT DEFAULT '', status INTEGER DEFAULT 200)"""
+               request_id TEXT DEFAULT '', status INTEGER DEFAULT 200,
+               source TEXT DEFAULT 'chat')"""
     )
     cols = [r[1] for r in conn.execute("PRAGMA table_info(usage)").fetchall()]
     for col, ddl in (
@@ -406,7 +407,8 @@ def init_db() -> None:
             ("effort", "TEXT DEFAULT ''"),
             ("upstream_model", "TEXT DEFAULT ''"),
             ("request_id", "TEXT DEFAULT ''"),
-            ("status", "INTEGER DEFAULT 200")):
+            ("status", "INTEGER DEFAULT 200"),
+            ("source", "TEXT DEFAULT 'chat'")):
         if col not in cols:
             try:
                 conn.execute(f"ALTER TABLE usage ADD COLUMN {col} {ddl}")
@@ -530,8 +532,8 @@ def record(provider: str, model: str, tin: int, tout: int, cost: float,
             "INSERT INTO usage(ts, provider, model, tokens_in, tokens_out,"
             " cost, ok, ms, err, token_id, first_byte_ms, stream,"
             " cache_hit, cache_miss, client_ip, user_agent, effort,"
-            " upstream_model, request_id, status)"
-            " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            " upstream_model, request_id, status, source)"
+            " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (now(), provider, model, int(tin), int(tout), float(cost),
              1 if ok else 0, int(ms), (error or "")[:300], token_id,
              int(e.get("first_byte_ms") or 0), 1 if e.get("stream") else 0,
@@ -541,7 +543,8 @@ def record(provider: str, model: str, tin: int, tout: int, cost: float,
              str(e.get("effort") or "")[:16],
              str(e.get("upstream_model") or "")[:120],
              str(e.get("request_id") or "")[:40],
-             int(e.get("status") or (200 if ok else 502))),
+             int(e.get("status") or (200 if ok else 502)),
+             str(e.get("source") or "chat")[:16]),
         )
         conn.commit()
         conn.close()
@@ -1695,13 +1698,17 @@ class Handler(BaseHTTPRequestHandler):
                 text = str(data)[:200]
             ms = int((now() - t0) * 1000)
             mark_ok(p)
-            record(p["name"], p["model"], 0, 0, 0.0, True, ms, warn)
+            record(p["name"], p["model"], 0, 0, 0.0, True, ms, warn,
+                   extra={"source": "probe", "upstream_model": p["model"],
+                          "first_byte_ms": ms, "status": 200})
             self.send_json(200, {"ok": True, "provider": name, "ms": ms,
                                  "sample": text[:400], "warning": warn})
         except Exception as exc:                       # noqa: BLE001
             ms = int((now() - t0) * 1000)
             mark_fail(p)
-            record(p["name"], p["model"], 0, 0, 0.0, False, ms, err_text(exc))
+            record(p["name"], p["model"], 0, 0, 0.0, False, ms, err_text(exc),
+                   extra={"source": "probe", "upstream_model": p["model"],
+                          "first_byte_ms": ms, "status": 502})
             self.send_json(200, {"ok": False, "provider": name, "ms": ms,
                                  "error": err_text(exc)[:400]})
 
@@ -1797,8 +1804,8 @@ class Handler(BaseHTTPRequestHandler):
             cur = conn.execute(
                 "SELECT ts, provider, model, tokens_in, tokens_out, cost, ok, ms,"
                 " err, token_id, first_byte_ms, stream, cache_hit, cache_miss,"
-                " client_ip, user_agent, effort, upstream_model, request_id, status"
-                " FROM usage ORDER BY ts DESC LIMIT ?", (limit,))
+                " client_ip, user_agent, effort, upstream_model, request_id, status,"
+                " source FROM usage ORDER BY ts DESC LIMIT ?", (limit,))
             for r in cur.fetchall():
                 tin, tout = int(r[3] or 0), int(r[4] or 0)
                 ms, fb = int(r[7] or 0), int(r[10] or 0)
@@ -1826,6 +1833,7 @@ class Handler(BaseHTTPRequestHandler):
                     "effort": r[16] or "",
                     "upstream_model": r[17] or "",
                     "request_id": r[18] or "",
+                    "source": r[20] or "chat",
                     "err": r[8] or "",
                     "token": names.get(str(r[9] or ""), "（主口令）" if not r[9] else "已删除"),
                 })
@@ -1890,6 +1898,7 @@ class Handler(BaseHTTPRequestHandler):
                            "upstream_model": str(data.get("_upstream") or payload.get("_route_model") or p["model"]),
                            "request_id": str(data.get("id") or ""),
                            "status": 200,
+                           "source": "chat",
                        })
                 mark_ok(p)
                 echo = payload.get("_echo_model") or ""
@@ -1915,6 +1924,7 @@ class Handler(BaseHTTPRequestHandler):
                            "effort": str(payload.get("reasoning_effort") or ""),
                            "stream": 1 if payload.get("stream") else 0,
                            "status": 502,
+                           "source": "chat",
                        })
                 last = msg
 
@@ -1961,6 +1971,7 @@ class Handler(BaseHTTPRequestHandler):
                                    or p["model"]),
                                "request_id": str(info.get("id") or ""),
                                "status": 200,
+                               "source": "chat",
                            })
                     mark_ok(p)
                     return
