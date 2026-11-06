@@ -3300,7 +3300,14 @@ function ocPaint(d){
   const ol = document.getElementById('ocOwnLog');
   if(ol) ol.textContent = d.oc_logs || '（暂无）';
   const lg = document.getElementById('ocLogin');
-  if(lg) lg.textContent = d.login_log || '（还没有登录输出）';
+  if(lg){
+    const urls = d.login_urls || [];
+    lg.textContent = (urls.length
+        ? ('授权链接（复制到浏览器打开）：' + String.fromCharCode(10)
+           + urls.join(String.fromCharCode(10)) + String.fromCharCode(10)
+           + '----------' + String.fromCharCode(10))
+        : '') + (d.login_log || '（还没有登录输出）');
+  }
   document.getElementById('ocEnv').textContent =
     'Node ' + (d.node_version || (d.node ? '?' : '未找到'))
     + (d.node ? ('（' + d.node + '）') : '')
