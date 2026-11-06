@@ -1,5 +1,5 @@
 appname=deepseek-gateway
-version=2.5.4
+version=2.5.5
 display_name=DeepSeek 网关
 desc=把火山方舟、硅基流动、OpenRouter、腾讯 TokenHub、百度千帆、DeepSeek 官方等多个上游聚合成一个 OpenAI 兼容端点。<br>默认只启用免费上游，付费一律关闭；免费额度用尽自动停用，绝不静默转付费。<br>纯 Python 标准库实现，不依赖 Docker 与任何第三方包。
 source=thirdparty
@@ -13,4 +13,4 @@ desktop_applaunchname=deepseek-gateway.main
 service_port=18787
 checkport=true
 ctl_stop=true
-changelog=2.5.4：修复 install-opencode.sh 带 CRLF 导致 Linux 上「set: pipefail: invalid option name」无法安装的问题——全部文本文件统一为 LF，并在结构自检里加断言防复发。2.5.3：一键安装优先装 opencode v2（@opencode/cli），面板显示实际版本。2.5.2：卡片按类型显示字段。2.4.x：上游协议。2.3.x：日志页。1.1.0：免费优先。1.0.0：首个版本。
+changelog=2.5.5：修复装了 opencode v2 却仍在跑 v1 的问题——v2（@opencode/cli）的可执行文件叫 opencode2 而不是 opencode，现在两个名字都认、优先用 opencode2；「试一句」结果会显示实际用的二进制名和版本（如 cli / opencode2 2.2.5）。2.5.4：修复 CRLF。2.5.3：优先装 v2。2.5.x：opencode 命令行方式。2.4.x：上游协议。2.3.x：日志页。1.1.0：免费优先。1.0.0：首个版本。
