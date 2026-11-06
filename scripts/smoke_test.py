@@ -403,15 +403,29 @@ def main() -> int:
 
         print("== 17. 模型映射（回显原名）==")
         http("POST", base + "/admin/api/config",
-             {"model_mapping": MODEL + "=上游真名"})
-        code, _, txt = http("POST", base + "/v1/chat/completions",
-                            {"model": MODEL,
-                             "messages": [{"role": "user", "content": "m"}]},
-                            headers={"Authorization": "Bearer " + key})
+             {"model_mapping": MODEL + "=upstream-real-name"})
+        code, hdrs, txt = http("POST", base + "/v1/chat/completions",
+                               {"model": MODEL,
+                                "messages": [{"role": "user", "content": "m"}]},
+                               headers={"Authorization": "Bearer " + key})
         body = json.loads(txt) if code == 200 else {}
         check(code == 200, "映射后仍成功", str(code))
         check(body.get("model") == MODEL, "响应回显客户端原名",
               str(body.get("model")))
+        check(hdrs.get("X-Gateway-Upstream-Model") == "upstream-real-name",
+              "响应头给出上游实际模型",
+              str(hdrs.get("X-Gateway-Upstream-Model")))
+
+        print("== 17b. 日志区分「点名」与「上游实际」==")
+        time.sleep(0.3)
+        code, _, txt = http("GET", base + "/admin/api/logs?kind=usage&limit=20")
+        rows = json.loads(txt).get("rows") or []
+        row = next((r for r in rows if r.get("upstream_model") == "upstream-real-name"), {})
+        check(bool(row), "日志里有这一条", str([r.get("upstream_model") for r in rows][:4]))
+        check(row.get("model") == MODEL, "点名列是客户端原名",
+              str(row.get("model")))
+        check(row.get("upstream_model") == "upstream-real-name", "上游列是真实模型",
+              str(row.get("upstream_model")))
         http("POST", base + "/admin/api/config", {"model_mapping": ""})
 
         print("== 18. 提示词模式 default ==")
