@@ -741,6 +741,22 @@ def main() -> int:
         check(steps.get("agents", {}).get("ok") is True, "能列出 agents",
               str(steps.get("agents", {}).get("data")))
 
+        print("== 19. opencode 模型预检 ==")
+        with open(os.path.join(pd, "opencode-badmodel.json"), "w", encoding="utf-8") as fh:
+            json.dump({"providers": [{
+                "name": "oc-badmodel", "type": "opencode", "enabled": False,
+                "priority": 99, "base_url": f"http://127.0.0.1:{OC_PORT}",
+                "model": "no-such-model", "opencode_provider": "opencode",
+                "free_only": True, "free_quota_tokens": 0,
+                "price_in": 0, "price_out": 0, "quant": "-",
+            }]}, fh, ensure_ascii=False)
+        http("POST", base + "/admin/api/reload", {})
+        code, _, txt = http("POST", base + "/admin/api/probe", {"name": "oc-badmodel"})
+        d5 = json.loads(txt) if code == 200 else {}
+        err = str(d5.get("error") or "")
+        check(d5.get("ok") is False and "可用列表" in err,
+              "模型不存在时给出可用列表", err[:100])
+
     finally:
         proc.terminate()
         try:
