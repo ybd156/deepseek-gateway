@@ -909,6 +909,26 @@ def main() -> int:
         check(code == 200 and isinstance(gw.get("text"), str), "网关日志可读",
               str(gw.get("path"))[:80])
 
+        print("== 26. 没有可用上游时说清楚原因 ==")
+        code, _, txt = http("GET", base + "/admin/api/config")
+        cfg6 = json.loads(txt)
+        for pp in cfg6["providers"]:
+            pp["enabled"] = False
+        http("POST", base + "/admin/api/config", cfg6)
+        code, _, txt = http("POST", base + "/v1/chat/completions",
+                            {"messages": [{"role": "user", "content": "hi"}]},
+                            headers={"Authorization": "Bearer " + key1})
+        e6 = json.loads(txt).get("error", {}) if code == 502 else {}
+        msg6 = str(e6.get("message") or "")
+        check(code == 502 and "没有可用上游" in msg6, "502 说没有可用上游",
+              f"code={code} body={txt[:200]}")
+        check("未启用" in msg6, "逐个列出原因（未启用）", msg6[:160])
+
+        # 复原：全部启用
+        for pp in cfg6["providers"]:
+            pp["enabled"] = True
+        http("POST", base + "/admin/api/config", cfg6)
+
     finally:
         proc.terminate()
         try:
