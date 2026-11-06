@@ -1681,25 +1681,31 @@ class Handler(BaseHTTPRequestHandler):
             t0 = time.time()
             print(f"[gateway] opencode 试一句：base={base} model={model} agent={agent}",
                   flush=True)
+            client = OpenCodeClient(base_url=base, model_id=model,
+                                    provider_id=prov, agent=agent, timeout=25)
             try:
-                client = OpenCodeClient(base_url=base, model_id=model,
-                                        provider_id=prov, agent=agent, timeout=30)
-                data = client.chat("回复两个字：OK")
+                probe = client.probe_message("回复两个字：OK", timeout=25)
+            except Exception as exc:            # noqa: BLE001
+                probe = {"steps": [{"step": "fatal", "ok": False, "error": str(exc)[:300]}]}
+            sec = time.time() - t0
+            steps = probe.get("steps") or []
+            sent = next((x for x in steps if x.get("step") == "send_message"), {})
+            if sent.get("ok"):
                 text = ""
                 try:
-                    text = str(data["choices"][0]["message"]["content"] or "")
+                    text = str(json.loads(sent.get("preview") or "{}"))[:200]
                 except Exception:
-                    text = str(data)[:200]
-                sec = time.time() - t0
+                    text = str(sent.get("preview"))[:200]
                 print(f"[gateway] opencode 试一句成功：{sec:.1f}s", flush=True)
                 self.send_json(200, {**SUPERVISOR.status(), "ok": True,
-                                     "message": f"试通了（{sec:.1f}s）：{text[:80]}",
-                                     "sample": text[:400]})
-            except Exception as exc:            # noqa: BLE001
-                sec = time.time() - t0
-                print(f"[gateway] opencode 试一句失败：{sec:.1f}s {exc}", flush=True)
+                                     "message": f"试通了（{sec:.1f}s）",
+                                     "probe": probe, "sample": text})
+            else:
+                err = str(sent.get("error") or (steps[-1].get("error") if steps else ""))[:300]
+                print(f"[gateway] opencode 试一句失败：{sec:.1f}s {err}", flush=True)
                 self.send_json(200, {**SUPERVISOR.status(), "ok": False,
-                                     "message": f"试失败（{sec:.1f}s）：{str(exc)[:300]}"})
+                                     "message": f"试失败（{sec:.1f}s）：{err}",
+                                     "probe": probe})
             return
         if action == "start":
             ok, msg = SUPERVISOR.start()
@@ -2607,7 +2613,10 @@ NAV
           <button onclick="ocAction('diagnose')">诊断</button>
           <button onclick="ocRefresh()">刷新</button>
         </div>
+        <div class="sub" style="margin:10px 0 4px">启动输出</div>
         <pre id="ocLog">（暂无日志）</pre>
+        <div class="sub" style="margin:10px 0 4px">opencode 自己的日志（provider 报错在这）</div>
+        <pre id="ocOwnLog">（暂无）</pre>
       </div>
     </div>
 
@@ -3024,6 +3033,8 @@ function ocPaint(d){
   el.className = 'tag ' + (d.running ? 'g' : (d.installed ? 'y' : 'd'));
   document.getElementById('ocLog').textContent =
     (d.last_error ? ('[错误] ' + d.last_error + ' | ') : '') + (d.log || '（暂无日志）');
+  const ol = document.getElementById('ocOwnLog');
+  if(ol) ol.textContent = d.oc_logs || '（暂无）';
   document.getElementById('ocEnv').textContent =
     'Node ' + (d.node_version || (d.node ? '?' : '未找到'))
     + (d.node ? ('（' + d.node + '）') : '')
@@ -3048,7 +3059,10 @@ async function ocAction(action){
     msg((d.ok ? '[成功] ' : '[失败] ') + (d.message || ''));
     ocPaint(d);
     if(action === 'diagnose' && d.diag){
-      document.getElementById('ocLog').textContent = JSON.stringify(d.diag, null, 2);
+      document.getElementById('ocOwnLog').textContent = JSON.stringify(d.diag, null, 2);
+    }
+    if(action === 'ping' && d.probe){
+      document.getElementById('ocOwnLog').textContent = JSON.stringify(d.probe, null, 2);
     }
   }catch(e){ msg('操作失败：' + e.message); }
 }
