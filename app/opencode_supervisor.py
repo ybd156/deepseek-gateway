@@ -122,6 +122,65 @@ class OpenCodeSupervisor:
     def is_running(self) -> bool:
         return self.proc is not None and self.proc.poll() is None
 
+    @staticmethod
+    def _strip_ansi(text: str) -> str:
+        out, i = [], 0
+        while i < len(text):
+            ch = text[i]
+            if ch == chr(27):
+                j = i + 1
+                if j < len(text) and text[j] == "[":
+                    j += 1
+                    while j < len(text) and not ("@" <= text[j] <= "~"):
+                        j += 1
+                    i = j + 1
+                    continue
+                i += 2
+                continue
+            out.append(ch)
+            i += 1
+        return "".join(out)
+
+    @classmethod
+    def _clean_pty(cls, raw: str) -> str:
+        """TUI 会逐字符重绘，这里把 ANSI 去掉、把碎行拼回去。"""
+        text = cls._strip_ansi(raw)
+        text = text.replace(chr(13) + chr(10), chr(10)).replace(chr(13), chr(10))
+        lines = text.split(chr(10))
+        short = sum(1 for ln in lines if len(ln.strip()) == 1)
+        if lines and short > len(lines) // 2:
+            return "".join(lines)
+        return chr(10).join(ln for ln in lines)
+
+    STOP_CHARS = (" ", chr(9), chr(10), chr(13), chr(34), chr(39),
+                  "<", ">", chr(65289), chr(65292), chr(12290), chr(65307))
+
+    @classmethod
+    def _find_urls(cls, text: str) -> list:
+        urls, i = [], 0
+        while True:
+            i = text.find("https://", i)
+            if i < 0:
+                break
+            j = i
+            while j < len(text) and text[j] not in cls.STOP_CHARS:
+                j += 1
+            urls.append(text[i:j])
+            i = j
+        seen, out = set(), []
+        for u in urls:
+            if u not in seen:
+                seen.add(u)
+                out.append(u)
+        return out
+
+    def login_urls(self) -> list:
+        try:
+            raw = open(self.login_log_path(), "rb").read().decode("utf-8", "ignore")
+        except Exception:
+            return []
+        return self._find_urls(self._clean_pty(raw))
+
     def login_log_path(self) -> str:
         return os.path.join(self.data_dir, "opencode-login.log")
 
@@ -131,7 +190,8 @@ class OpenCodeSupervisor:
                 fh.seek(0, os.SEEK_END)
                 size = fh.tell()
                 fh.seek(max(0, size - 64 * 1024))
-                text = fh.read().decode("utf-8", "ignore")
+                raw = fh.read().decode("utf-8", "ignore")
+            text = self._clean_pty(raw)
             return chr(10).join(text.splitlines()[-lines:])
         except FileNotFoundError:
             return "（还没有登录输出）"
@@ -267,6 +327,7 @@ class OpenCodeSupervisor:
             "autostart": bool(opts.get("autostart", True)),
             "oc_logs": self.own_logs(120),
             "login_log": self.login_log(60),
+            "login_urls": self.login_urls(),
             "uptime": int(time.time() - self.started_at) if self.is_running() else 0,
             "restarts": self.restarts,
             "last_error": self.last_error,
