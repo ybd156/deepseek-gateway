@@ -79,8 +79,18 @@ fi
 
 # ── 2) opencode ──
 echo "安装 opencode-ai 到 $npm_config_prefix …"
-if ! "$NPM_BIN" install -g --prefix "$npm_config_prefix" \
-        --no-fund --no-audit --loglevel=error opencode-ai; then
+INSTALLED=""
+# 优先装 v2（@opencode/cli）：v1（opencode-ai，0.x/1.x）已不再支持免费模型
+for PKG in "@opencode/cli" "opencode-ai"; do
+    echo "安装 $PKG 到 $npm_config_prefix …"
+    if "$NPM_BIN" install -g --prefix "$npm_config_prefix" --no-fund --no-audit --loglevel=error "$PKG"; then
+        INSTALLED="$PKG"
+        echo "已安装：$PKG"
+        break
+    fi
+    echo "$PKG 安装失败，换下一个…"
+done
+if [ -z "$INSTALLED" ]; then
     echo "npm 安装失败。常见原因："
     echo "  1) 网络 / npm 源：npm config get registry（可设成 https://registry.npmmirror.com）"
     echo "  2) 权限：确认 $DATA_DIR 对当前用户可写"
@@ -89,8 +99,11 @@ fi
 
 OC_BIN="$DATA_DIR/npm/bin/opencode"
 if [ ! -x "$OC_BIN" ]; then
-    ALT="$DATA_DIR/npm/lib/node_modules/opencode-ai/bin/opencode"
-    if [ -f "$ALT" ]; then
+    ALT=""
+    for cand in "$DATA_DIR/npm/lib/node_modules/@opencode/cli/bin/opencode"                 "$DATA_DIR/npm/lib/node_modules/opencode-ai/bin/opencode"; do
+        if [ -f "$cand" ]; then ALT="$cand"; break; fi
+    done
+    if [ -n "$ALT" ] && [ -f "$ALT" ]; then
         mkdir -p "$DATA_DIR/npm/bin"
         ln -sf "$ALT" "$OC_BIN"
         chmod +x "$OC_BIN" 2>/dev/null || true
