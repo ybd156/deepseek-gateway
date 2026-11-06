@@ -1208,20 +1208,36 @@ def call_opencode_cli(p: dict, payload: dict) -> tuple[dict, str]:
 
     print("[opencode-cli] " + " ".join(args[:-1]) + " <prompt>", flush=True)
     t0 = time.time()
+    timed_out = False
     with tempfile.TemporaryFile() as fo, tempfile.TemporaryFile() as fe:
         try:
             rc = subprocess.call(args, stdout=fo, stderr=fe, env=env, cwd=ws,
                                  timeout=p["timeout"])
         except subprocess.TimeoutExpired:
-            raise ProviderError(
-                f"opencode run 超时（{p['timeout']}s）。"
-                f"可在 providers.json 里调大该上游的 timeout") from None
+            timed_out = True
+            rc = -1
         except Exception as exc:                    # noqa: BLE001
             raise ProviderError(f"启动 opencode run 失败：{exc}") from None
         fo.seek(0)
         fe.seek(0)
         out = strip_ansi(fo.read().decode("utf-8", "ignore")).strip()
         err = strip_ansi(fe.read().decode("utf-8", "ignore")).strip()
+
+    blob = (err + " " + out)
+    if "usage limit" in blob.lower() or "Free usage limit" in blob:
+        with STATE_LOCK:
+            STATE.setdefault(p["name"], {})["cooldown_until"] = time.time() + 3600
+        raise ProviderError(
+            "OpenCode 免费额度已用尽（服务端原话：Free usage limit reached）。"
+            "免费模型只对订阅 OpenCode Go 的账号开放 API/CLI 调用；"
+            "已把该上游冷却 1 小时，请改用有 Key 的上游。")
+
+    if timed_out:
+        seen = (err or out)[-400:]
+        raise ProviderError(
+            f"opencode run 超时（{p['timeout']}s）。"
+            + ("它已经输出的内容：" + seen if seen else "（没有任何输出，可能卡在鉴权或重试）")
+            + " 可在 providers.json 里调大该上游的 timeout")
 
     sec = time.time() - t0
     print(f"[opencode-cli] rc={rc} {sec:.1f}s out={out[:120]!r} err={err[:160]!r}",
@@ -1819,7 +1835,7 @@ class Handler(BaseHTTPRequestHandler):
             if mode == "cli":
                 try:
                     data, _w = call_opencode_cli(
-                        {**(op or {}), "timeout": 25},
+                        {**(op or {}), "timeout": 45},
                         {"messages": [{"role": "user", "content": "回复两个字：OK"}],
                          "model": model})
                     text = str(data["choices"][0]["message"]["content"] or "")
@@ -2359,8 +2375,10 @@ _CSS = """
   .pgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(380px,1fr));gap:14px}
   .provcard{background:#fff;border:1px solid var(--line);border-radius:12px;padding:14px;
         box-shadow:0 1px 2px rgba(16,24,40,.04)}
-  .phd{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:12px}
-  .phd>span{flex:none;white-space:nowrap}
+  .phd{display:flex;justify-content:space-between;align-items:center;gap:8px;
+       margin-bottom:12px;flex-wrap:wrap}
+  .phd>input{flex:1 1 180px;min-width:0}
+  .phd>span{flex:none;white-space:nowrap;display:flex;gap:6px;align-items:center}
   .phd>span a{font-size:12px}
   .phd .nm{font-weight:700;flex:1}
   .f2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
@@ -2847,101 +2865,138 @@ function provCard(p, i){
   const cUrl = guessConsole(p);
   const link = cUrl
     ? '<a href="' + esc(cUrl) + '" target="_blank" rel="noopener">去获取 Key ↗</a>' : '';
-  return '<div class="provcard" data-i="' + i + '">'
-    + '<div class="phd"><input data-f="name" value="' + esc(p.name)
-    + '" style="font-weight:700;flex:1;min-width:0">'
-    + '<span class="sub">' + link + '</span></div>'
+  const isOc = (p.type === 'opencode');
+  const badge = '<span class="tag d">'
+    + (isOc ? ('opencode' + ((p.opencode_mode === 'cli') ? '·cli' : '')) : (p.protocol || 'openai'))
+    + '</span>';
 
-    + '<div class="field"><label>接口地址</label>'
-    + '<input data-f="base_url" value="' + esc(p.base_url) + '">'
-    + '<div class="hint">OpenAI 兼容根地址，结尾不要带斜杠。</div></div>'
+  let h = '<div class="provcard" data-i="' + i + '">';
 
-    + '<div class="f2">'
-    + '<div class="field"><label>默认模型</label>'
-    + '<input data-f="model" value="' + esc(p.model) + '">'
-    + '<div class="hint">客户端不点名时用这个。</div></div>'
-    + '<div class="field"><label>优先级</label>'
-    + '<input type="number" data-f="priority" value="' + (p.priority || 100) + '">'
-    + '<div class="hint">越小越先试</div></div>'
-    + '</div>'
+  h += '<div class="phd"><input data-f="name" value="' + esc(p.name)
+     + '" style="font-weight:700;flex:1;min-width:0">'
+     + '<span class="sub">' + badge + ' ' + link + '</span></div>';
 
-    + '<div class="field"><label>更多模型（可选）</label>'
-    + '<input data-f="models" value="' + esc((p.models || []).join(', ')) + '"'
-    + ' placeholder="逗号分隔，客户端可以直接点名这些模型">'
-    + '<div class="hint"><button type="button" onclick="discover(' + i + ')">'
-    + '探测这个上游有哪些模型</button> <span id="dsc_' + i + '"></span></div></div>'
+  h += '<div class="field"><label>接口地址</label>'
+     + '<input data-f="base_url" value="' + esc(p.base_url) + '">'
+     + '<div class="hint">'
+     + (isOc ? '本地 opencode server 地址，一般不用改'
+             : 'OpenAI 兼容根地址，结尾不要带斜杠')
+     + '</div></div>';
 
-    + '<div class="f2">'
-    + '<div class="field"><label>类型</label><select data-f="type">'
-    + '<option value="http"' + (p.type !== 'opencode' ? ' selected' : '') + '>http（HTTP 上游）</option>'
-    + '<option value="opencode"' + (p.type === 'opencode' ? ' selected' : '') + '>opencode（本地 server）</option>'
-    + '</select></div>'
-    + '<div class="field"><label>协议（用哪种接口跟它说话）</label><select data-f="protocol">'
-    + '<option value=""' + (!p.protocol ? ' selected' : '') + '>OpenAI Chat Completions</option>'
-    + '<option value="responses"' + (p.protocol === 'responses' ? ' selected' : '') + '>OpenAI Responses（/responses）</option>'
-    + '<option value="anthropic"' + (p.protocol === 'anthropic' ? ' selected' : '') + '>Anthropic Messages</option>'
-    + '<option value="gemini"' + (p.protocol === 'gemini' ? ' selected' : '') + '>Google Gemini</option>'
-    + '</select><div class="hint">类型选 opencode 时忽略这一项</div></div>'
-    + '</div>'
-    + '<div class="field"><label>opencode 调用方式</label><select data-f="opencode_mode">'
-    + '<option value="server"' + ((p.opencode_mode || 'server') !== 'cli' ? ' selected' : '') + '>服务端 API（opencode serve）</option>'
-    + '<option value="cli"' + (p.opencode_mode === 'cli' ? ' selected' : '') + '>命令行（opencode run）</option>'
-    + '</select><div class="hint">只有类型选 opencode 时有效。cli 走客户端本体，'
-    + '可能绕过「免费模型只在 OpenCode 内可用」的限制</div></div>'
-    + '<div class="f2">'
-    + '</div>'
-    + '<div class="f2">'
-    + '<div class="field"><label>量化</label>'
-    + '<input data-f="quant" value="' + esc(p.quant) + '" placeholder="fp8 / fp4"></div>'
-    + '</div>'
+  h += '<div class="f2">'
+     + '<div class="field"><label>默认模型</label>'
+     + '<input data-f="model" value="' + esc(p.model) + '">'
+     + '<div class="hint">客户端不点名时用这个</div></div>'
+     + '<div class="field"><label>优先级</label>'
+     + '<input type="number" data-f="priority" value="' + (p.priority || 100) + '">'
+     + '<div class="hint">越小越先试</div></div>'
+     + '</div>';
 
-    + '<div class="field"><label>密钥</label>'
-    + '<input type="password" class="kval" data-env="' + esc(p.api_key_env) + '"'
-    + ' placeholder="' + esc(p._key_source || '无') + '">'
-    + '<div class="hint">变量名 <span class="mono">' + esc(p.api_key_env || '（未设置）') + '</span>'
-    + '　留空保存 = 不改动。</div></div>'
+  h += '<div class="field"><label>更多模型（可选）</label>'
+     + '<input data-f="models" value="' + esc((p.models || []).join(', ')) + '"'
+     + ' placeholder="逗号分隔，客户端可以直接点名这些模型">'
+     + '<div class="hint"><button type="button" onclick="discover(' + i + ')">'
+     + '探测这个上游有哪些模型</button> <span id="dsc_' + i + '"></span></div></div>';
 
-    + '<div class="field"><label>控制台地址</label><div class="inline">'
-    + '<input data-f="console_url" value="' + esc(p.console_url) + '"'
-    + ' placeholder="' + esc(cUrl || '留空则按接口自动识别') + '">'
-    + '<button type="button" data-url="' + esc(cUrl) + '" onclick="openConsole(this)">打开</button>'
-    + '</div></div>'
+  h += '<div class="f2">'
+     + '<div class="field"><label>类型</label>'
+     + '<select data-f="type" onchange="switchType(this)">'
+     + '<option value="http"' + (!isOc ? ' selected' : '') + '>http（HTTP 上游）</option>'
+     + '<option value="opencode"' + (isOc ? ' selected' : '') + '>opencode（本地 server）</option>'
+     + '</select></div>';
 
-    + '<div class="field"><label>免费额度（tokens）</label><div class="inline">'
-    + '<input type="number" data-f="free_quota_tokens" value="' + (p.free_quota_tokens || 0) + '" style="max-width:190px">'
-    + '<label class="chk"><input type="checkbox" data-f="free_only"'
-    + (p.free_only ? ' checked' : '') + '> 免费上游</label>'
-    + '</div><div class="hint">0 = 不限。填了额度，用尽后自动停用，不会悄悄转成付费。</div></div>'
+  if(isOc){
+    h += '<div class="field"><label>调用方式</label>'
+       + '<select data-f="opencode_mode">'
+       + '<option value="server"' + ((p.opencode_mode || 'server') !== 'cli' ? ' selected' : '') + '>服务端 API（serve）</option>'
+       + '<option value="cli"' + (p.opencode_mode === 'cli' ? ' selected' : '') + '>命令行（run）</option>'
+       + '</select><div class="hint">cli 走客户端本体，可能绕过免费池限制</div></div>';
+  } else {
+    h += '<div class="field"><label>协议</label>'
+       + '<select data-f="protocol">'
+       + '<option value=""' + (!p.protocol ? ' selected' : '') + '>OpenAI Chat Completions</option>'
+       + '<option value="responses"' + (p.protocol === 'responses' ? ' selected' : '') + '>OpenAI Responses</option>'
+       + '<option value="anthropic"' + (p.protocol === 'anthropic' ? ' selected' : '') + '>Anthropic Messages</option>'
+       + '<option value="gemini"' + (p.protocol === 'gemini' ? ' selected' : '') + '>Google Gemini</option>'
+       + '</select><div class="hint">网关按它转换请求与响应</div></div>';
+  }
+  h += '</div>';
 
-    + '<div class="f2">'
-    + '<div class="field"><label>输入价 $/百万</label>'
-    + '<input type="number" step="0.0001" data-f="price_in" value="' + (p.price_in || 0) + '"></div>'
-    + '<div class="field"><label>输出价 $/百万</label>'
-    + '<input type="number" step="0.0001" data-f="price_out" value="' + (p.price_out || 0) + '"></div>'
-    + '</div>'
+  if(isOc){
+    h += '<div class="f2">'
+       + '<div class="field"><label>providerID</label>'
+       + '<input data-f="opencode_provider" value="' + esc(p.opencode_provider || 'opencode') + '"></div>'
+       + '<div class="field"><label>agent</label>'
+       + '<input data-f="opencode_agent" value="' + esc(p.opencode_agent || 'plan') + '">'
+       + '<div class="hint">建议 plan（只读，不会自己循环）</div></div>'
+       + '</div>';
+  } else {
+    h += '<div class="f2">'
+       + '<div class="field"><label>密钥</label>'
+       + '<input type="password" class="kval" data-env="' + esc(p.api_key_env) + '"'
+       + ' placeholder="' + esc(p._key_source || '无') + '">'
+       + '<div class="hint">变量名 <span class="mono">'
+       + esc(p.api_key_env || '（未设置）') + '</span>　留空保存 = 不改动</div></div>'
+       + '<div class="field"><label>量化</label>'
+       + '<input data-f="quant" value="' + esc(p.quant) + '" placeholder="fp8 / fp4"></div>'
+       + '</div>';
+  }
 
-    + '<div class="f2">'
-    + '<div class="field"><label>模型名校验</label>'
-    + '<input data-f="model_contains" value="' + esc(p.model_contains) + '" placeholder="留空 = 不校验">'
-    + '<div class="hint">响应里的模型名必须包含它，防上游偷换</div></div>'
-    + '<div class="field"><label>单独代理</label>'
-    + '<input data-f="proxy" value="' + esc(p.proxy) + '" placeholder="留空 = 用全局">'
-    + '<div class="hint">可填 socks5://host:port</div></div>'
-    + '</div>'
+  h += '<div class="field"><label>控制台地址</label><div class="inline">'
+     + '<input data-f="console_url" value="' + esc(p.console_url) + '"'
+     + ' placeholder="' + esc(cUrl || '留空则按接口自动识别') + '">'
+     + '<button type="button" data-url="' + esc(cUrl) + '" onclick="openConsole(this)">打开</button>'
+     + '</div></div>';
 
-    + '<div class="field"><label>备注</label>'
-    + '<input data-f="note" value="' + esc(p.note) + '"></div>'
+  h += '<div class="field"><label>免费额度（tokens）</label><div class="inline">'
+     + '<input type="number" data-f="free_quota_tokens" value="' + (p.free_quota_tokens || 0) + '" style="max-width:190px">'
+     + '<label class="chk"><input type="checkbox" data-f="free_only"'
+     + (p.free_only ? ' checked' : '') + '> 免费上游</label>'
+     + '</div><div class="hint">0 = 不限。填了额度，用尽后自动停用，不会悄悄转成付费。</div></div>';
 
-    + '<div class="field" style="margin-bottom:0;display:flex;gap:8px;align-items:center;flex-wrap:wrap">'
-    + '<label class="chk"><input type="checkbox" data-f="enabled"' + (p.enabled ? ' checked' : '') + '> 启用</label>'
-    + '<label class="chk"><input type="checkbox" data-f="no_auth"' + (p.no_auth ? ' checked' : '') + '> 免密钥</label>'
-    + '<label class="chk"><input type="checkbox" data-f="strict_model"' + (p.strict_model ? ' checked' : '') + '> 严格校验</label>'
-    + '<span style="flex:1"></span>'
-    + '<button class="pri" onclick="saveOne(' + i + ')">保存这张</button>'
-    + '<button onclick="probeOne(\\'' + esc(p.name) + '\\')">自检</button>'
-    + '<button class="danger" onclick="delProv(' + i + ')">删除</button>'
-    + '</div>'
-    + '</div>';
+  h += '<div class="f2">'
+     + '<div class="field"><label>输入价 $/百万</label>'
+     + '<input type="number" step="0.0001" data-f="price_in" value="' + (p.price_in || 0) + '"></div>'
+     + '<div class="field"><label>输出价 $/百万</label>'
+     + '<input type="number" step="0.0001" data-f="price_out" value="' + (p.price_out || 0) + '"></div>'
+     + '</div>';
+
+  h += '<div class="f2">'
+     + '<div class="field"><label>模型名校验</label>'
+     + '<input data-f="model_contains" value="' + esc(p.model_contains) + '" placeholder="留空 = 不校验">'
+     + '<div class="hint">响应里的模型名必须包含它，防上游偷换</div></div>'
+     + '<div class="field"><label>单独代理</label>'
+     + '<input data-f="proxy" value="' + esc(p.proxy) + '" placeholder="留空 = 用全局">'
+     + '<div class="hint">可填 socks5://host:port</div></div>'
+     + '</div>';
+
+  h += '<div class="field"><label>备注</label>'
+     + '<input data-f="note" value="' + esc(p.note) + '"></div>';
+
+  h += '<div class="field" style="margin-bottom:0;display:flex;gap:8px;align-items:center;flex-wrap:wrap">'
+     + '<label class="chk"><input type="checkbox" data-f="enabled"'
+     + (p.enabled ? ' checked' : '') + '> 启用</label>'
+     + '<label class="chk"><input type="checkbox" data-f="no_auth"'
+     + (p.no_auth ? ' checked' : '') + '> 免密钥</label>'
+     + '<label class="chk"><input type="checkbox" data-f="strict_model"'
+     + (p.strict_model ? ' checked' : '') + '> 严格校验</label>'
+     + '<span style="flex:1"></span>'
+     + '<button class="pri" onclick="saveOne(' + i + ')">保存这张</button>'
+     + '<button data-name="' + esc(p.name) + '" onclick="probeOne(this.dataset.name)">自检</button>'
+     + '<button class="danger" onclick="delProv(' + i + ')">删除</button>'
+     + '</div>';
+
+  h += '</div>';
+  return h;
+}
+
+function switchType(el){
+  const card = el.closest ? el.closest('.provcard') : null;
+  if(!card) return;
+  const idx = Number(card.dataset.i);
+  CFG.providers[idx] = readCard(card);
+  card.outerHTML = provCard(CFG.providers[idx], idx);
+  msg('已切换类型，记得点「保存这张」');
 }
 
 function render(){
