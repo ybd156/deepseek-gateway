@@ -364,7 +364,8 @@ class OpenCodeSupervisor:
             ver = self._version(found)
             self._ver_cache.pop(found + "-v", None)
             ver = self._version(found)
-            return True, f"安装完成：{os.path.basename(found)} {ver}".strip()
+            return True, (f"安装完成：{os.path.basename(found)} {ver}".strip()
+                          + "　请点「停止」再「启动」，让服务用上新版本")
         except Exception as exc:                    # noqa: BLE001
             return False, f"安装失败：{exc}"
 
