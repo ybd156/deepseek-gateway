@@ -1866,7 +1866,7 @@ class Handler(BaseHTTPRequestHandler):
             port = int(opencode_opts().get("port") or 4096)
             base = "http://127.0.0.1:%d" % port     # 「试一句」测的是受管运行时
             model = (op or {}).get("model") or ""
-            agent = (op or {}).get("opencode_agent") or "plan"
+            agent = (op or {}).get("opencode_agent") or ""
             prov = (op or {}).get("opencode_provider") or "opencode"
             t0 = time.time()
             print(f"[gateway] opencode 试一句：base={base} model={model} agent={agent}",
