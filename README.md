@@ -327,15 +327,23 @@ OpenCode 支持自定义 OpenAI 兼容 provider，把网关当成一个 provider
 OpenCode 的免费 DeepSeek **不能直接当 API 调**（外部请求返回 `403 FreeTierError`），
 但它自带一个**官方文档化**的无头 server，网关可以驱动它——请求真的从 OpenCode 内部发出，不伪造任何东西。
 
-**前提**：NAS 上装了 Node.js 和 OpenCode。
+**不需要自己装 Node 和 OpenCode**——设置页里有「**OpenCode 运行时**」卡片：
 
-```bash
-npm install -g opencode-ai
+1. 点「**一键安装**」→ 把 Node + opencode 装进 `@appdata/deepseek-gateway/node|npm`（**不碰系统包**，删目录即卸载）
+2. 点「**启动**」→ 在私有工作目录里跑 `opencode serve`
+3. 卡片上直接看状态（运行中 / 未运行 / 未安装）、pid、运行时长、重启次数、实时日志
 
-# 建议在一个空目录里跑，别让它碰你的文件
-cd /vol1/@appdata/deepseek-gateway
-./opencode-serve.sh          # 等价于 opencode serve --port 4096 --hostname 127.0.0.1
-```
+**看门狗**：进程意外退出会自动重启（最多连续 5 次，带退避）。
+**按需启动**：请求打到 `type=opencode` 的上游时，如果服务没在跑会先尝试拉起。
+
+也可以在卡片里指定：
+- **二进制**：留空 = 自动查找（私有安装 → PATH）；也可以指向你自己装的 opencode
+- **端口**：默认 4096
+- **工作目录**：留空 = 应用数据目录下的 `opencode-workspace`（空目录，防止 Agent 误动你的文件）
+- **自动重启**：开关
+
+> 一键安装依赖网络（nodejs.org + npm 源）。装不上时日志会写清楚是下载失败还是 npm 失败，
+> 也可以 `NODE_VER=v20.18.0` 换个 Node 版本重试，或手动把 opencode 装好后在「二进制」里填路径。
 
 **然后启用上游**（`providers.json` 里已经有这条，默认 `enabled: false`）：
 
