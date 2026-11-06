@@ -984,6 +984,50 @@ def render_prompt(payload: dict) -> str:
     return "\n\n".join(out)
 
 
+def strip_ansi(text: str) -> str:
+    """去掉终端颜色转义，日志里别带 [91m 这种东西。"""
+    out, i = [], 0
+    while i < len(text):
+        ch = text[i]
+        if ch == chr(27):
+            j = i + 1
+            if j < len(text) and text[j] == "[":
+                j += 1
+                while j < len(text) and not ("@" <= text[j] <= "~"):
+                    j += 1
+                i = j + 1
+                continue
+            i += 2
+            continue
+        out.append(ch)
+        i += 1
+    return "".join(out)
+
+
+def extract_err_ref(text: str) -> str:
+    """从报错里抠出 opencode 的 ref（err_xxxxx），用来回查日志。"""
+    i = text.find("err_")
+    if i < 0:
+        return ""
+    j = i
+    while j < len(text) and (text[j].isalnum() or text[j] in "_-"):
+        j += 1
+    return text[i:j]
+
+
+def opencode_log_for_ref(ref: str, lines: int = 400) -> str:
+    if not ref:
+        return ""
+    try:
+        tail = SUPERVISOR.own_logs(lines)
+    except Exception:
+        return ""
+    hits = [ln.strip() for ln in tail.splitlines() if ref in ln]
+    if not hits:
+        return ""
+    return " ｜日志：" + " / ".join(h[-220:] for h in hits[-3:])
+
+
 def opencode_log_error_hint(lines: int = 60) -> str:
     """从 opencode 自己的日志里摘出最后一条错误原因。"""
     try:
@@ -1150,9 +1194,13 @@ def call_opencode_cli(p: dict, payload: dict) -> tuple[dict, str]:
 
     prompt = render_prompt(payload)
     model = pick_model(p, payload)
+    # opencode CLI 的 --model 要 provider/model 形式
+    model_arg = model
+    if model and "/" not in model:
+        model_arg = (p.get("opencode_provider") or "opencode") + "/" + model
     args = [bin_path, "run"]
-    if model:
-        args += ["--model", model]
+    if model_arg:
+        args += ["--model", model_arg]
     agent = p.get("opencode_agent") or "plan"
     if agent:
         args += ["--agent", agent]
@@ -1172,14 +1220,17 @@ def call_opencode_cli(p: dict, payload: dict) -> tuple[dict, str]:
             raise ProviderError(f"启动 opencode run 失败：{exc}") from None
         fo.seek(0)
         fe.seek(0)
-        out = fo.read().decode("utf-8", "ignore").strip()
-        err = fe.read().decode("utf-8", "ignore").strip()
+        out = strip_ansi(fo.read().decode("utf-8", "ignore")).strip()
+        err = strip_ansi(fe.read().decode("utf-8", "ignore")).strip()
 
     sec = time.time() - t0
     print(f"[opencode-cli] rc={rc} {sec:.1f}s out={out[:120]!r} err={err[:160]!r}",
           flush=True)
     if rc != 0:
-        raise ProviderError(f"opencode run 退出码 {rc}：{(err or out)[:300]}")
+        detail = (err or out)[:300]
+        ref = extract_err_ref(err + " " + out)
+        raise ProviderError(f"opencode run 退出码 {rc}：{detail}"
+                            + opencode_log_for_ref(ref))
     if not out:
         raise ProviderError("opencode run 没有输出：" + (err[:200] or "（空）"))
     tin = max(1, len(prompt) // 3)
