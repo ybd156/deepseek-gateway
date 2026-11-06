@@ -14,64 +14,81 @@ import re
 # context 单位 token；vision = 能否吃图片；reasoning = 支持的思考档位列表。
 BUILTIN_CAPS: list = [
     # DeepSeek
-    ("deepseek-v4.1-flash", {"context": 128000, "vision": False,
+    ("deepseek-v4.1-flash", {"context": 128000, "max_output": 32768, "vision": False,
                              "reasoning": ["off", "low", "medium", "high"]}),
-    ("deepseek-v4.1-pro", {"context": 256000, "vision": False,
+    ("deepseek-v4.1-pro", {"context": 256000, "max_output": 65536, "vision": False,
                            "reasoning": ["off", "low", "medium", "high"]}),
-    ("deepseek-v4-pro", {"context": 256000, "vision": False,
+    ("deepseek-v4-pro", {"context": 256000, "max_output": 65536, "vision": False,
                          "reasoning": ["off", "low", "medium", "high"]}),
-    ("deepseek-v3", {"context": 128000, "vision": False,
+    ("deepseek-v3", {"context": 128000, "max_output": 8192, "vision": False,
                      "reasoning": ["off"]}),
-    ("deepseek-r1", {"context": 128000, "vision": False,
+    ("deepseek-r1", {"context": 128000, "max_output": 32768, "vision": False,
                      "reasoning": ["off", "low", "medium", "high"]}),
-    ("deepseek", {"context": 128000, "vision": False, "reasoning": ["off"]}),
+    ("deepseek", {"context": 128000, "max_output": 8192, "vision": False,
+                  "reasoning": ["off"]}),
     # GLM / 智谱
-    ("glm-5.3", {"context": 200000, "vision": True,
+    ("glm-5.3", {"context": 200000, "max_output": 65536, "vision": True,
                  "reasoning": ["off", "low", "medium", "high"]}),
-    ("glm-5.2", {"context": 200000, "vision": True,
+    ("glm-5.2", {"context": 200000, "max_output": 65536, "vision": True,
                  "reasoning": ["off", "low", "medium", "high"]}),
-    ("glm-4.5v", {"context": 128000, "vision": True, "reasoning": ["off"]}),
-    ("glm", {"context": 128000, "vision": False, "reasoning": ["off"]}),
+    ("glm-4.5v", {"context": 128000, "max_output": 16384, "vision": True,
+                  "reasoning": ["off"]}),
+    ("glm", {"context": 128000, "max_output": 16384, "vision": False,
+             "reasoning": ["off"]}),
     # Kimi / Moonshot
-    ("kimi-k2.5", {"context": 256000, "vision": True,
+    ("kimi-k2.5", {"context": 256000, "max_output": 32768, "vision": True,
                    "reasoning": ["off", "low", "medium", "high"]}),
-    ("kimi-k2", {"context": 256000, "vision": False, "reasoning": ["off"]}),
-    ("kimi", {"context": 128000, "vision": False, "reasoning": ["off"]}),
+    ("kimi-k2", {"context": 256000, "max_output": 32768, "vision": False,
+                 "reasoning": ["off"]}),
+    ("kimi", {"context": 128000, "max_output": 16384, "vision": False,
+              "reasoning": ["off"]}),
     # Qwen
-    ("qwen3-vl", {"context": 128000, "vision": True, "reasoning": ["off"]}),
-    ("qwen3", {"context": 128000, "vision": False,
+    ("qwen3-vl", {"context": 128000, "max_output": 16384, "vision": True,
+                  "reasoning": ["off"]}),
+    ("qwen3", {"context": 128000, "max_output": 32768, "vision": False,
                "reasoning": ["off", "low", "medium", "high"]}),
-    ("qwen", {"context": 131072, "vision": False, "reasoning": ["off"]}),
+    ("qwen2.5-vl", {"context": 128000, "max_output": 8192, "vision": True,
+                    "reasoning": ["off"]}),
+    ("qwen", {"context": 131072, "max_output": 8192, "vision": False,
+              "reasoning": ["off"]}),
     # Claude
-    ("claude-opus", {"context": 200000, "vision": True,
+    ("claude-opus", {"context": 200000, "max_output": 32000, "vision": True,
                      "reasoning": ["off", "low", "medium", "high", "max"]}),
-    ("claude-sonnet", {"context": 200000, "vision": True,
+    ("claude-sonnet", {"context": 200000, "max_output": 64000, "vision": True,
                        "reasoning": ["off", "low", "medium", "high", "max"]}),
-    ("claude-haiku", {"context": 200000, "vision": True,
+    ("claude-haiku", {"context": 200000, "max_output": 32000, "vision": True,
                       "reasoning": ["off", "low", "medium", "high"]}),
-    ("claude", {"context": 200000, "vision": True, "reasoning": ["off"]}),
+    ("claude", {"context": 200000, "max_output": 8192, "vision": True,
+                "reasoning": ["off"]}),
     # OpenAI
-    ("gpt-5", {"context": 400000, "vision": True,
+    ("gpt-5", {"context": 400000, "max_output": 128000, "vision": True,
                "reasoning": ["off", "low", "medium", "high"]}),
-    ("gpt-4.1", {"context": 1000000, "vision": True, "reasoning": ["off"]}),
-    ("gpt-4o", {"context": 128000, "vision": True, "reasoning": ["off"]}),
-    ("gpt-4", {"context": 128000, "vision": True, "reasoning": ["off"]}),
-    ("o3", {"context": 200000, "vision": True,
+    ("gpt-4.1", {"context": 1000000, "max_output": 32768, "vision": True,
+                 "reasoning": ["off"]}),
+    ("gpt-4o", {"context": 128000, "max_output": 16384, "vision": True,
+                "reasoning": ["off"]}),
+    ("gpt-4", {"context": 128000, "max_output": 8192, "vision": True,
+               "reasoning": ["off"]}),
+    ("o3", {"context": 200000, "max_output": 100000, "vision": True,
             "reasoning": ["off", "low", "medium", "high"]}),
-    ("o4", {"context": 200000, "vision": True,
+    ("o4", {"context": 200000, "max_output": 100000, "vision": True,
             "reasoning": ["off", "low", "medium", "high"]}),
     # Gemini
-    ("gemini", {"context": 1000000, "vision": True,
+    ("gemini", {"context": 1000000, "max_output": 65536, "vision": True,
                 "reasoning": ["off", "low", "medium", "high"]}),
     # 其它常见开源
-    ("llama", {"context": 128000, "vision": False, "reasoning": ["off"]}),
-    ("mistral", {"context": 128000, "vision": False, "reasoning": ["off"]}),
-    ("llava", {"context": 32000, "vision": True, "reasoning": ["off"]}),
-    ("qwen2.5-vl", {"context": 128000, "vision": True, "reasoning": ["off"]}),
-    ("internvl", {"context": 32000, "vision": True, "reasoning": ["off"]}),
+    ("llama", {"context": 128000, "max_output": 8192, "vision": False,
+               "reasoning": ["off"]}),
+    ("mistral", {"context": 128000, "max_output": 8192, "vision": False,
+                 "reasoning": ["off"]}),
+    ("llava", {"context": 32000, "max_output": 4096, "vision": True,
+               "reasoning": ["off"]}),
+    ("internvl", {"context": 32000, "max_output": 4096, "vision": True,
+                  "reasoning": ["off"]}),
 ]
 
-DEFAULT_CAPS = {"context": 32768, "vision": False, "reasoning": ["off"]}
+DEFAULT_CAPS = {"context": 32768, "max_output": 4096,
+                "vision": False, "reasoning": ["off"]}
 TIERS = ["off", "low", "medium", "high", "max"]
 
 
@@ -86,7 +103,7 @@ def caps_for(model: str, override: dict | None = None) -> dict:
     base = dict(hit or DEFAULT_CAPS)
     base["known"] = hit is not None
     if isinstance(override, dict) and override:
-        for k in ("context", "vision", "reasoning"):
+        for k in ("context", "max_output", "vision", "reasoning"):
             if k in override and override[k] not in (None, ""):
                 base[k] = override[k]
         base["known"] = True
