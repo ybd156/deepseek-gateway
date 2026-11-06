@@ -1,5 +1,5 @@
 appname=deepseek-gateway
-version=1.7.1
+version=1.8.0
 display_name=DeepSeek 网关
 desc=把火山方舟、硅基流动、OpenRouter、腾讯 TokenHub、百度千帆、DeepSeek 官方等多个上游聚合成一个 OpenAI 兼容端点。<br>默认只启用免费上游，付费一律关闭；免费额度用尽自动停用，绝不静默转付费。<br>纯 Python 标准库实现，不依赖 Docker 与任何第三方包。
 source=thirdparty
@@ -13,4 +13,4 @@ desktop_applaunchname=deepseek-gateway.main
 service_port=18787
 checkport=true
 ctl_stop=true
-changelog=1.7.1：飞牛自带 Node，一键安装改为优先复用系统 node/npm（找不到才下载），并显式兜底 /usr/local/bin 等目录——应用以专用用户运行、PATH 干净时也能找到；启动子进程时把 node 目录注入 PATH；卡片上显示检测到的 Node/npm/opencode 路径与版本。1.7.0：集成 OpenCode 运行时托管。1.6.x：设置页与 SSO。1.1.0：免费优先。1.0.0：首个版本。
+changelog=1.8.0：状态页新增「接入信息」（Base URL / 模型名 / curl 示例，可直接复制）；设置页新增预设模板（OpenAI 兼容接口 / OpenRouter / 本地 Ollama）；支持免密钥上游（no_auth，本地 Ollama、vLLM、LM Studio 这类）；全局代理支持协议下拉（HTTP/HTTPS/SOCKS5），SOCKS5 用标准库自实现隧道；CI 增加页面 JS 语法检查（node --check），防止白屏包再出厂。1.7.x：OpenCode 运行时托管与系统 Node 复用。1.6.x：独立设置页 + 统一网关登录。1.1.0：免费优先。1.0.0：首个版本。
