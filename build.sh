@@ -4,7 +4,7 @@ set -e
 cd "$(dirname "$0")"
 
 # 生命周期脚本和 shell 工具必须有执行位，否则装完起不来
-chmod +x cmd/* app/service.sh app/opencode-serve.sh 2>/dev/null || true
+chmod +x cmd/* app/service.sh app/opencode-serve.sh app/install-opencode.sh 2>/dev/null || true
 
 if ! command -v fnpack >/dev/null 2>&1; then
     cat <<'EOF'
