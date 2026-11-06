@@ -122,16 +122,30 @@ def main() -> int:
     check(os.path.isdir(os.path.join("app", uidir)), f"app/{uidir}/ 存在")
     try:
         ui = json.load(open(os.path.join("app", uidir, "config"), encoding="utf-8"))
+        urls = ui.get(".url", {})
         entry = mf.get("desktop_applaunchname", "")
-        check(entry in ui.get(".url", {}), "desktop_applaunchname 指向已定义入口", entry)
-        if entry in ui.get(".url", {}):
-            check(ui[".url"][entry].get("port") == mf.get("service_port"),
-                  "入口 port == manifest.service_port",
-                  f"{ui['.url'][entry].get('port')} vs {mf.get('service_port')}")
-            icon = ui[".url"][entry].get("icon", "")
+        check(entry in urls, "desktop_applaunchname 指向已定义入口", entry)
+        if entry in urls:
+            e = urls[entry]
+            if e.get("gatewayPrefix"):
+                check(True, "主入口走统一网关（SSO，不需要 port）")
+                check(str(e.get("gatewaySocket", "")).endswith(".sock"),
+                      "gatewaySocket 声明了 socket 文件名", str(e.get("gatewaySocket")))
+            else:
+                check(e.get("port") == mf.get("service_port"),
+                      "入口 port == manifest.service_port",
+                      f"{e.get('port')} vs {mf.get('service_port')}")
+            icon = e.get("icon", "")
             for size in ("64", "256"):
                 base = os.path.join("app", uidir, icon.replace("{0}", size))
                 check(os.path.exists(base), f"入口图标 icon_{size} 存在", base)
+
+        # 必须保留一个端口直连入口：统一网关出问题时还能进得去
+        direct = [k for k, v in urls.items() if v.get("port")]
+        check(bool(direct), "保留了端口直连入口（网关不可用时的兜底）", str(direct))
+        for k in direct:
+            check(urls[k].get("port") == mf.get("service_port"),
+                  f"{k} 的 port 与 manifest 一致", str(urls[k].get("port")))
     except Exception as exc:                           # noqa: BLE001
         check(False, "读取 app/ui/config", str(exc))
 
