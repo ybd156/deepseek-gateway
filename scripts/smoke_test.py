@@ -611,6 +611,58 @@ def main() -> int:
         check(ln.get("has_key") is True and ln.get("key_source") == "免密钥",
               "状态显示为免密钥", f"{ln.get('has_key')} / {ln.get('key_source')}")
 
+        print("== 16. 多令牌：别人怎么用这个网关 ==")
+        code, _, txt = http("GET", base + "/admin/api/tokens")
+        tk = json.loads(txt)
+        check(code == 200 and tk.get("open_mode") is True,
+              "初始为全开放模式", str(tk.get("open_mode")))
+
+        code, _, txt = http("POST", base + "/admin/api/tokens",
+                            {"action": "create", "name": "小明", "quota_tokens": 0})
+        d = json.loads(txt)
+        key1 = (d.get("token") or {}).get("key", "")
+        check(code == 200 and key1.startswith("sk-fnos-"), "创建令牌并返回明文 Key", key1[:14])
+
+        code, hdrs, _ = http("POST", base + "/v1/chat/completions",
+                             {"messages": [{"role": "user", "content": "hi"}]},
+                             headers={"Authorization": "Bearer " + key1})
+        check(code == 200, "用令牌调用成功", str(code))
+
+        code, _, _ = http("POST", base + "/v1/chat/completions",
+                          {"messages": [{"role": "user", "content": "hi"}]},
+                          headers={"Authorization": "Bearer sk-wrong-key"})
+        check(code == 401, "错误 Key 被拒", str(code))
+
+        code, _, _ = http("POST", base + "/v1/chat/completions",
+                          {"messages": [{"role": "user", "content": "hi"}]})
+        check(code == 401, "没带 Key 被拒（不再是全开放）", str(code))
+
+        # 限额令牌
+        code, _, txt = http("POST", base + "/admin/api/tokens",
+                            {"action": "create", "name": "限额", "quota_tokens": 10})
+        d2 = json.loads(txt)
+        key2 = (d2.get("token") or {}).get("key", "")
+        tid2 = (d2.get("token") or {}).get("id", "")
+        http("POST", base + "/v1/chat/completions",
+             {"messages": [{"role": "user", "content": "hi"}]},
+             headers={"Authorization": "Bearer " + key2})
+        code, _, txt = http("POST", base + "/v1/chat/completions",
+                            {"messages": [{"role": "user", "content": "hi"}]},
+                            headers={"Authorization": "Bearer " + key2})
+        check(code == 429, "超出额度返回 429", f"{code} {txt[:80]}")
+
+        # 停用后立刻失效
+        http("POST", base + "/admin/api/tokens", {"action": "toggle", "id": tid2, "enabled": False})
+        code, _, _ = http("POST", base + "/v1/chat/completions",
+                          {"messages": [{"role": "user", "content": "hi"}]},
+                          headers={"Authorization": "Bearer " + key2})
+        check(code == 401, "停用后令牌失效", str(code))
+
+        code, _, txt = http("GET", base + "/admin/api/tokens")
+        tk2 = json.loads(txt)
+        u = next((x for x in tk2["tokens"] if x["id"] == tid2), {})
+        check(u.get("used_tokens", 0) > 0, "按令牌统计用量", str(u.get("used_tokens")))
+
     finally:
         proc.terminate()
         try:
