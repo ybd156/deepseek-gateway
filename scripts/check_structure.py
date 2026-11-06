@@ -144,12 +144,6 @@ def main() -> int:
                 base = os.path.join("app", uidir, icon.replace("{0}", size))
                 check(os.path.exists(base), f"入口图标 icon_{size} 存在", base)
 
-        # 必须保留一个端口直连入口：统一网关出问题时还能进得去
-        direct = [k for k, v in urls.items() if v.get("port")]
-        check(bool(direct), "保留了端口直连入口（网关不可用时的兜底）", str(direct))
-        for k in direct:
-            check(urls[k].get("port") == mf.get("service_port"),
-                  f"{k} 的 port 与 manifest 一致", str(urls[k].get("port")))
     except Exception as exc:                           # noqa: BLE001
         check(False, "读取 app/ui/config", str(exc))
 
@@ -227,6 +221,18 @@ def main() -> int:
         check(not bad, "文本文件都是 LF 换行", ", ".join(bad[:5]))
     except Exception as exc:                           # noqa: BLE001
         check(False, "换行符检查", str(exc))
+
+    print("== 7e. 桌面图标只保留一个 ==")
+    try:
+        import json as _json
+        ui = _json.load(open(os.path.join("app", "ui", "config"), encoding="utf-8"))
+        entries = list((ui.get(".url") or {}).keys())
+        check(len(entries) == 1, "只注册一个桌面入口", str(entries))
+        main = (ui.get(".url") or {}).get("deepseek-gateway.main") or {}
+        check(bool(main.get("gatewayPrefix")), "主入口走统一网关")
+        check("direct" not in " ".join(entries), "没有重复的直连入口", str(entries))
+    except Exception as exc:                           # noqa: BLE001
+        check(False, "桌面入口检查", str(exc))
 
     print("== 8. 图标尺寸 ==")
     try:
