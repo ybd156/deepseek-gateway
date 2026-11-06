@@ -217,8 +217,15 @@ LM Studio 这类不需要鉴权的服务用这个。面板上密钥来源会显�
 鉴权优先级：**主口令** > **任意启用的令牌**。当「主口令为空」且「没有启用的令牌」时进入
 **全开放模式**（局域网自用，谁都能调），面板会用黄字警告你。
 
-给别人的接入信息就是状态页「接入信息」里那三行：Base URL + 模型名 + curl 示例，
+给别人的接入信息就是状态页「接入信息」里那几行：**直连地址** + 模型名 + curl 示例，
 把 Key 换成他们自己那把即可。
+
+> ⚠️ **外部客户端一律用直连地址** `http://<飞牛IP>:18787/v1`。
+> 桌面图标走的是飞牛统一网关 `/app/deepseek-gateway/v1`，那条路要 **NAS 登录 Cookie**——
+> 只有在本机浏览器里打开时才有效，Cherry Studio / OpenCode / 脚本带 Bearer Key 是进不去的
+> （会返回登录页 HTML，表现为 `did not answer with JSON`）。
+>
+> 接口已带 CORS 头与 OPTIONS 预检，Open WebUI / LobeChat 这类浏览器端也能直连。
 
 密钥落盘在 `@appdata/deepseek-gateway/secrets.json`（600），不会出现在 `ps` 里。
 
@@ -226,7 +233,7 @@ LM Studio 这类不需要鉴权的服务用这个。面板上密钥来源会显�
 
 | 项 | 值 |
 |---|---|
-| Base URL | `http://<飞牛IP>:18787/v1` |
+| Base URL | `http://<飞牛IP>:18787/v1`（**直连端口**） |
 | API Key | 向导里设的口令（留空则随便填） |
 | Model | `deepseek/deepseek-v4.1-flash-1017` 或 `deepseek-flash` |
 
