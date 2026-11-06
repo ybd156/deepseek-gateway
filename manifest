@@ -1,5 +1,5 @@
 appname=deepseek-gateway
-version=1.9.1
+version=1.9.2
 display_name=DeepSeek 网关
 desc=把火山方舟、硅基流动、OpenRouter、腾讯 TokenHub、百度千帆、DeepSeek 官方等多个上游聚合成一个 OpenAI 兼容端点。<br>默认只启用免费上游，付费一律关闭；免费额度用尽自动停用，绝不静默转付费。<br>纯 Python 标准库实现，不依赖 Docker 与任何第三方包。
 source=thirdparty
@@ -13,4 +13,4 @@ desktop_applaunchname=deepseek-gateway.main
 service_port=18787
 checkport=true
 ctl_stop=true
-changelog=1.9.1：全局代理旁加「测试」按钮（真连一次，回报 HTTP 状态与耗时）；访问令牌的 Key 支持「显示/隐藏」（管理员可查看完整值）；保存配置后回显「磁盘上实际存下的值」，一眼确认到底存没存。1.9.0：多令牌机制。1.8.0：OpenAI 兼容预设/免密钥上游/SOCKS5。1.7.x：OpenCode 运行时托管。1.6.x：独立设置页 + 统一网关登录。1.1.0：免费优先。1.0.0：首个版本。
+changelog=1.9.2：代理测试的提示更准确——401/403 明确说明是「目标需要鉴权、通道正常」，并在成功后提醒「别忘了点保存全部」。1.9.1：代理测试按钮、Key 显示/隐藏、磁盘回显。1.9.0：多令牌。1.8.0：OpenAI 兼容预设/免密钥/SOCKS5。1.7.x：OpenCode 运行时。1.6.x：设置页 + 统一网关。1.1.0：免费优先。1.0.0：首个版本。
