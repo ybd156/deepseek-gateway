@@ -705,6 +705,7 @@ def load_config() -> None:
                 # type=http：OpenAI 兼容 HTTP 上游（默认）
                 # type=opencode：驱动本地 opencode serve（见 opencode_upstream.py）
                 "type": str(it.get("type", "http") or "http").lower(),
+                "protocol": str(it.get("protocol", "") or "").lower(),
                 "opencode_provider": str(it.get("opencode_provider", "opencode") or "opencode"),
                 "opencode_agent": str(it.get("opencode_agent", "") or ""),
                 "opencode_tools": it.get("opencode_tools"),
@@ -980,6 +981,144 @@ def render_prompt(payload: dict) -> str:
     return "\n\n".join(out)
 
 
+def _split_messages(payload: dict) -> tuple:
+    """OpenAI messages → (system 文本, [{role, content}])"""
+    system, msgs = [], []
+    for m in payload.get("messages") or []:
+        if not isinstance(m, dict):
+            continue
+        role = str(m.get("role") or "user")
+        content = m.get("content")
+        if isinstance(content, list):
+            content = "".join(str(c.get("text") or "") if isinstance(c, dict) else str(c)
+                              for c in content)
+        content = str(content or "")
+        if role == "system":
+            system.append(content)
+        elif role in ("user", "assistant"):
+            msgs.append({"role": role, "content": content})
+    return chr(10).join(system), msgs
+
+
+def _oa_wrap(model: str, text: str, tin, tout, cid: str = "") -> dict:
+    """把别家协议的结果包成 OpenAI Chat Completions 形状。"""
+    tin = int(tin or 0)
+    tout = int(tout or 0)
+    return {
+        "id": cid or ("chatcmpl-" + str(int(time.time()))),
+        "object": "chat.completion",
+        "model": model,
+        "choices": [{"index": 0,
+                     "message": {"role": "assistant", "content": text},
+                     "finish_reason": "stop"}],
+        "usage": {"prompt_tokens": tin, "completion_tokens": tout,
+                  "total_tokens": tin + tout},
+    }
+
+
+def _post_json(p: dict, url: str, headers: dict, body: dict) -> dict:
+    req = urllib.request.Request(
+        url, data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
+        headers=headers, method="POST")
+    proxy = p.get("proxy") or RUNTIME.get("proxy") or ""
+    opener = build_opener(proxy, p["timeout"])
+    try:
+        resp = opener.open(req, timeout=p["timeout"]) if opener else             urllib.request.urlopen(req, timeout=p["timeout"])
+        try:
+            raw = resp.read()
+        finally:
+            resp.close()
+    except Exception as exc:                        # noqa: BLE001
+        raise ProviderError(err_text(exc)) from None
+    try:
+        return json.loads(raw.decode("utf-8", "ignore"))
+    except Exception:
+        raise ProviderError("上游返回的不是 JSON：" + raw[:150].decode("utf-8", "ignore")) from None
+
+
+def _call_responses(p: dict, payload: dict) -> dict:
+    """OpenAI Responses API（/responses）"""
+    model = pick_model(p, payload)
+    system, msgs = _split_messages(payload)
+    items = ([{"role": "system", "content": system}] if system else []) + msgs
+    body: dict = {"model": model, "input": items}
+    mt = payload.get("max_tokens") or payload.get("max_output_tokens")
+    if mt:
+        body["max_output_tokens"] = int(mt)
+    body.update(p.get("extra") or {})
+    headers = {"Content-Type": "application/json"}
+    if p["api_key"]:
+        headers["Authorization"] = "Bearer " + p["api_key"]
+    data = _post_json(p, p["base_url"].rstrip("/") + "/responses", headers, body)
+    text = ""
+    for item in data.get("output") or []:
+        for c in (item.get("content") or []) if isinstance(item, dict) else []:
+            if isinstance(c, dict):
+                text += str(c.get("text") or "")
+    u = data.get("usage") or {}
+    return _oa_wrap(model, text, u.get("input_tokens"), u.get("output_tokens"),
+                    str(data.get("id") or ""))
+
+
+def _call_anthropic(p: dict, payload: dict) -> dict:
+    """Anthropic Messages API（/v1/messages）"""
+    model = pick_model(p, payload)
+    system, msgs = _split_messages(payload)
+    body: dict = {"model": model,
+                  "max_tokens": int(payload.get("max_tokens") or 4096),
+                  "messages": msgs or [{"role": "user", "content": ""}]}
+    if system:
+        body["system"] = system
+    body.update(p.get("extra") or {})
+    base = p["base_url"].rstrip("/")
+    url = base + ("/messages" if base.endswith("/v1") else "/v1/messages")
+    headers = {"Content-Type": "application/json",
+               "anthropic-version": "2023-06-01"}
+    if p["api_key"]:
+        headers["x-api-key"] = p["api_key"]
+    data = _post_json(p, url, headers, body)
+    text = "".join(str(c.get("text") or "") for c in (data.get("content") or [])
+                   if isinstance(c, dict))
+    u = data.get("usage") or {}
+    return _oa_wrap(model, text, u.get("input_tokens"), u.get("output_tokens"),
+                    str(data.get("id") or ""))
+
+
+def _call_gemini(p: dict, payload: dict) -> dict:
+    """Google Gemini generateContent"""
+    model = pick_model(p, payload)
+    system, msgs = _split_messages(payload)
+    contents = [{"role": "user" if m["role"] == "user" else "model",
+                 "parts": [{"text": m["content"]}]} for m in msgs]
+    body: dict = {"contents": contents}
+    if system:
+        body["systemInstruction"] = {"parts": [{"text": system}]}
+    body.update(p.get("extra") or {})
+    url = p["base_url"].rstrip("/") + "/models/" + model + ":generateContent"
+    headers = {"Content-Type": "application/json"}
+    if p["api_key"]:
+        headers["x-goog-api-key"] = p["api_key"]
+    data = _post_json(p, url, headers, body)
+    text = ""
+    for cand in data.get("candidates") or []:
+        for part in ((cand.get("content") or {}).get("parts") or []):
+            if isinstance(part, dict):
+                text += str(part.get("text") or "")
+    u = data.get("usageMetadata") or {}
+    return _oa_wrap(model, text, u.get("promptTokenCount"),
+                    u.get("candidatesTokenCount"), str(data.get("responseId") or ""))
+
+
+ALT_PROTOCOLS = {
+    "responses": _call_responses,
+    "openai-responses": _call_responses,
+    "anthropic": _call_anthropic,
+    "claude": _call_anthropic,
+    "gemini": _call_gemini,
+    "google": _call_gemini,
+}
+
+
 def call_provider(p: dict, payload: dict) -> tuple[dict, str]:
     """统一调用入口，返回 (OpenAI 形状的 dict, 警告信息)。
 
@@ -999,6 +1138,12 @@ def call_provider(p: dict, payload: dict) -> tuple[dict, str]:
             raise ProviderError(str(exc)) from None
         upstream = str(data.pop("_upstream_model", "") or data.get("model") or "")
         return data, check_model(p, {"model": upstream})
+
+    # 非 OpenAI Chat Completions 的上游协议：统一转成 OpenAI 形状再返回
+    proto = (p.get("protocol") or "").lower()
+    if proto in ALT_PROTOCOLS:
+        data = ALT_PROTOCOLS[proto](p, payload)
+        return data, check_model(p, data)
 
     req = urllib.request.Request(
         p["base_url"] + "/chat/completions",
@@ -1524,6 +1669,38 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json(400, {"ok": False, "error": "bad request"})
             return
 
+        if action == "ping":
+            ops = [x for x in PROVIDERS if x["type"] == "opencode"]
+            on = [x for x in ops if x["enabled"]] or ops
+            op = min(on, key=lambda x: x["priority"]) if on else None
+            port = int(opencode_opts().get("port") or 4096)
+            base = "http://127.0.0.1:%d" % port     # 「试一句」测的是受管运行时
+            model = (op or {}).get("model") or ""
+            agent = (op or {}).get("opencode_agent") or "plan"
+            prov = (op or {}).get("opencode_provider") or "opencode"
+            t0 = time.time()
+            print(f"[gateway] opencode 试一句：base={base} model={model} agent={agent}",
+                  flush=True)
+            try:
+                client = OpenCodeClient(base_url=base, model_id=model,
+                                        provider_id=prov, agent=agent, timeout=30)
+                data = client.chat("回复两个字：OK")
+                text = ""
+                try:
+                    text = str(data["choices"][0]["message"]["content"] or "")
+                except Exception:
+                    text = str(data)[:200]
+                sec = time.time() - t0
+                print(f"[gateway] opencode 试一句成功：{sec:.1f}s", flush=True)
+                self.send_json(200, {**SUPERVISOR.status(), "ok": True,
+                                     "message": f"试通了（{sec:.1f}s）：{text[:80]}",
+                                     "sample": text[:400]})
+            except Exception as exc:            # noqa: BLE001
+                sec = time.time() - t0
+                print(f"[gateway] opencode 试一句失败：{sec:.1f}s {exc}", flush=True)
+                self.send_json(200, {**SUPERVISOR.status(), "ok": False,
+                                     "message": f"试失败（{sec:.1f}s）：{str(exc)[:300]}"})
+            return
         if action == "start":
             ok, msg = SUPERVISOR.start()
         elif action == "stop":
@@ -1682,6 +1859,7 @@ class Handler(BaseHTTPRequestHandler):
                 "enabled": p["enabled"],
                 "has_key": bool(p["api_key"]) or p["type"] == "opencode" or p["no_auth"],
                 "type": p["type"],
+                "protocol": p.get("protocol") or "",
                 "key_env": p["key_env"],
                 "key_source": source,
                 "priority": p["priority"],
@@ -1853,8 +2031,8 @@ class Handler(BaseHTTPRequestHandler):
             tried.append(p["name"])
             t0 = time.time()
 
-            # opencode 上游没有流式：先阻塞拿到结果，再分块吐给客户端
-            if p["type"] == "opencode":
+            # opencode 和非 OpenAI 协议没有流式：先阻塞拿到结果，再分块吐给客户端
+            if p["type"] == "opencode" or (p.get("protocol") or "").lower() in ALT_PROTOCOLS:
                 try:
                     data, warn = call_provider(p, payload)
                 except Exception as exc:           # noqa: BLE001
@@ -2237,7 +2415,9 @@ async function load(){
         quota = '<span style="color:' + col + '">' + p.used_tokens.toLocaleString() + '</span>'
               + '<span class="sub"> / ' + p.free_quota_tokens.toLocaleString() + '</span>';
       } else { quota = '<span class="sub">免费不限</span>'; }
-      const typeTag = p.type === 'opencode' ? ' <span class="tag d">opencode</span>' : '';
+      const typeTag = p.type === 'opencode'
+        ? ' <span class="tag d">opencode</span>'
+        : (p.protocol ? ' <span class="tag d">' + esc(p.protocol) + '</span>' : '');
       const btn = p.enabled
         ? '<button onclick="tog(\\'' + p.name + '\\',false)">停用</button>'
         : '<button onclick="tog(\\'' + p.name + '\\',true)">启用</button>';
@@ -2423,6 +2603,7 @@ NAV
           <button onclick="ocAction('install')">一键安装</button>
           <button onclick="ocAction('start')">启动</button>
           <button onclick="ocAction('stop')">停止</button>
+          <button onclick="ocAction('ping')">试一句</button>
           <button onclick="ocAction('diagnose')">诊断</button>
           <button onclick="ocRefresh()">刷新</button>
         </div>
@@ -2529,9 +2710,17 @@ function provCard(p, i){
 
     + '<div class="f2">'
     + '<div class="field"><label>类型</label><select data-f="type">'
-    + '<option value="http"' + (p.type !== 'opencode' ? ' selected' : '') + '>http（OpenAI 兼容）</option>'
+    + '<option value="http"' + (p.type !== 'opencode' ? ' selected' : '') + '>http（HTTP 上游）</option>'
     + '<option value="opencode"' + (p.type === 'opencode' ? ' selected' : '') + '>opencode（本地 server）</option>'
     + '</select></div>'
+    + '<div class="field"><label>协议（用哪种接口跟它说话）</label><select data-f="protocol">'
+    + '<option value=""' + (!p.protocol ? ' selected' : '') + '>OpenAI Chat Completions</option>'
+    + '<option value="responses"' + (p.protocol === 'responses' ? ' selected' : '') + '>OpenAI Responses（/responses）</option>'
+    + '<option value="anthropic"' + (p.protocol === 'anthropic' ? ' selected' : '') + '>Anthropic Messages</option>'
+    + '<option value="gemini"' + (p.protocol === 'gemini' ? ' selected' : '') + '>Google Gemini</option>'
+    + '</select><div class="hint">类型选 opencode 时忽略这一项</div></div>'
+    + '</div>'
+    + '<div class="f2">'
     + '<div class="field"><label>量化</label>'
     + '<input data-f="quant" value="' + esc(p.quant) + '" placeholder="fp8 / fp4"></div>'
     + '</div>'
