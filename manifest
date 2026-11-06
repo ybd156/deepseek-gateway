@@ -1,5 +1,5 @@
 appname=deepseek-gateway
-version=3.0.0
+version=3.0.1
 display_name=AI 网关
 desc=把多个模型服务商聚合成一个 OpenAI 兼容接口，跑在自己的飞牛 NAS 上。<br>支持 OpenAI Chat / Responses / Anthropic / Gemini 四种上游协议，失败自动切换下一家。<br>带用量统计（按天、按上游）、访问令牌、调用日志、出站品牌词脱敏、本地 opencode 托管。<br>免费额度可硬卡，用尽自动停用，绝不静默转付费。纯 Python 标准库，零第三方依赖，零 Docker。
 source=thirdparty
@@ -13,4 +13,4 @@ desktop_applaunchname=deepseek-gateway.main
 service_port=18787
 checkport=true
 ctl_stop=true
-changelog=3.0.0：整体重写。后端拆分模块、界面改为独立静态文件（HTML/CSS/JS 分离，浅色侧边栏布局，五个页面：概览 / 上游 / 统计 / 日志 / 设置）。新增用量统计（按天、按上游，含成功率与平均耗时）、出站品牌词脱敏（可选作用域）、SSE 真流式透传、访问令牌验证、更清晰的 502 原因说明。2.7.x：opencode 命令行修复（--standalone、干净环境、模型探测）。2.6.x：登录向导。2.5.x：opencode CLI。2.4.x：上游协议。1.0.0：首个版本。
+changelog=3.0.1：界面不再把「服务未运行」「未登录」显示成问题——命令行模式下这两项都不需要，装好即可用免费模型；opencode 自带运行时，没装 Node 也不影响；点名的模型不再被静默换成默认模型（不认识就明确报错并列出可用模型，响应头 X-Gateway-Upstream-Model 可核对）。3.0.0：整体重写，新界面 + 统计 + 请求事件日志 + 模型能力 + 策略控制。
