@@ -37,6 +37,7 @@ from urllib.parse import urlparse
 
 from opencode_upstream import OpenCodeClient, OpenCodeError
 from opencode_supervisor import OpenCodeSupervisor
+from proxy_support import build_opener, parse_proxy
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 APPNAME = "deepseek-gateway"
@@ -210,7 +211,7 @@ def atomic_write_json(path: str, data) -> None:
 EDITABLE_FIELDS = ("name", "type", "enabled", "priority", "base_url", "model",
                    "model_contains", "strict_model", "free_only", "free_quota_tokens",
                    "price_in", "price_out", "quant", "proxy", "console_url",
-                   "note", "api_key_env", "opencode_provider", "opencode_agent")
+                   "note", "api_key_env", "no_auth", "opencode_provider", "opencode_agent")
 
 
 def config_snapshot() -> dict:
@@ -308,9 +309,11 @@ def config_save(body: dict) -> dict:
 
 
 def provider_key_source(p: dict, sec: dict | None = None) -> str:
-    """密钥来源：面板 / 向导 / 配置 / 无 / 本地(opencode)。"""
+    """密钥来源：面板 / 向导 / 配置 / 无 / 本地(opencode) / 免密钥。"""
     if p["type"] == "opencode":
         return "本地"
+    if p.get("no_auth"):
+        return "免密钥"
     if sec is None:
         sec = load_secrets()
     if p["key_env"] and sec.get(p["key_env"]):
@@ -391,6 +394,7 @@ def load_config() -> None:
                 "timeout": int(it.get("timeout", default_timeout)),
                 "model_contains": str(it.get("model_contains", "") or ""),
                 "strict_model": bool(it.get("strict_model", False)),
+                "no_auth": bool(it.get("no_auth", False)),
                 "free_only": bool(it.get("free_only", False)),
                 "free_quota_tokens": int(it.get("free_quota_tokens", 0) or 0),
                 "extra": it.get("extra") or {},
@@ -508,7 +512,7 @@ def candidates(strategy: str) -> list[dict]:
         live = [
             p for p in PROVIDERS
             if p["enabled"]
-            and (p["api_key"] or p["type"] == "opencode")   # opencode 走本地，不需要 key
+            and (p["api_key"] or p["type"] == "opencode" or p["no_auth"])
             and STATE.get(p["name"], {}).get("cooldown_until", 0) <= now
             and not is_exhausted(p, used)
         ]
@@ -643,9 +647,8 @@ def call_provider(p: dict, payload: dict) -> tuple[dict, str]:
     try:
         # 每个上游可以单独指定代理；没指定就用全局代理
         proxy = p.get("proxy") or RUNTIME.get("proxy") or ""
-        if proxy:
-            opener = urllib.request.build_opener(
-                urllib.request.ProxyHandler({"http": proxy, "https": proxy}))
+        opener = build_opener(proxy, p["timeout"])     # socks5 也支持
+        if opener is not None:
             resp = opener.open(req, timeout=p["timeout"])
         else:
             resp = urllib.request.urlopen(req, timeout=p["timeout"])
@@ -927,6 +930,8 @@ class Handler(BaseHTTPRequestHandler):
             patch["cooldown_seconds"] = max(1, min(cd, 3600))
         if "gateway_token" in body:
             patch["gateway_token"] = str(body["gateway_token"] or "").strip()
+        if "proxy" in body:
+            patch["proxy"] = str(body["proxy"] or "").strip()
 
         if not patch:
             self.send_json(400, {"ok": False, "error": "没有要更新的字段"})
@@ -996,7 +1001,7 @@ class Handler(BaseHTTPRequestHandler):
             rows.append({
                 "name": p["name"],
                 "enabled": p["enabled"],
-                "has_key": bool(p["api_key"]) or p["type"] == "opencode",
+                "has_key": bool(p["api_key"]) or p["type"] == "opencode" or p["no_auth"],
                 "type": p["type"],
                 "key_env": p["key_env"],
                 "key_source": source,
@@ -1312,6 +1317,13 @@ async function api(path, opts){
 }
 function esc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/"/g,'&quot;')
   .replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+function parseProxy(s){
+  s = String(s||'').trim();
+  if(!s) return {scheme:'', addr:''};
+  const m = s.match(/^([a-z0-9]+):\/\/(.*)$/i);
+  if(m) return {scheme: m[1].toLowerCase(), addr: m[2]};
+  return {scheme:'http', addr:s};
+}
 document.querySelectorAll('[data-nav]').forEach(a => { a.href = BASE + a.dataset.nav; });
 """
 
@@ -1326,6 +1338,13 @@ _STATUS_BODY = """
     <div class="card"><div class="k">24h 花费 (USD)</div><div class="v" id="cost">-</div></div>
     <div class="card"><div class="k">可用上游</div><div class="v" id="live">-</div></div>
     <div class="card"><div class="k">排序策略</div><div class="v" id="strat" style="font-size:15px">-</div></div>
+  </div>
+
+  <h2>接入信息（给客户端用，可直接复制）</h2>
+  <div class="prov" style="max-width:900px">
+    <div class="fld"><label>Base URL</label><input id="epUrl" readonly></div>
+    <div class="fld"><label>模型名</label><input id="epModels" readonly placeholder="加载中…"></div>
+    <div class="fld"><label>示例</label><input id="epCurl" readonly></div>
   </div>
 
   <div class="row">
@@ -1411,7 +1430,23 @@ async function reloadCfg(){
   catch(e){}
   load();
 }
-load(); setInterval(load, 5000);
+async function loadEndpoint(){
+  try{
+    const base = location.origin + BASE + '/v1';
+    document.getElementById('epUrl').value = base;
+    const r = await fetch(BASE + '/v1/models', {headers:H()});
+    const d = await r.json();
+    const ids = (d.data || []).map(m => m.id);
+    document.getElementById('epModels').value = ids.length ? ids.join('  ,  ') : '（还没配置上游）';
+    const first = ids[0] || 'deepseek-v4.1-flash';
+    document.getElementById('epCurl').value =
+      'curl ' + base + '/chat/completions -H "Content-Type: application/json" '
+      + '-d ' + String.fromCharCode(39) + '{"model":"' + first
+      + '","messages":[{"role":"user","content":"hi"}]}' + String.fromCharCode(39);
+  }catch(e){}
+}
+
+load(); loadEndpoint(); setInterval(load, 5000);
 """
 
 _SETTINGS_BODY = """
@@ -1434,7 +1469,14 @@ _SETTINGS_BODY = """
   </div>
   <div class="row">
     <span class="sub" style="margin:0">全局代理</span>
-    <input id="setProxy" placeholder="http://192.168.1.10:7890（留空 = 不用代理）" style="flex:1;min-width:280px">
+    <select id="setProxyScheme" style="max-width:180px">
+      <option value="">不用代理</option>
+      <option value="http">HTTP</option>
+      <option value="https">HTTPS</option>
+      <option value="socks5">SOCKS5</option>
+      <option value="socks5h">SOCKS5（代理解析域名）</option>
+    </select>
+    <input id="setProxyAddr" placeholder="主机:端口，如 192.168.1.10:7890" style="flex:1;min-width:240px">
   </div>
 
   <h2>OpenCode 运行时（给 type=opencode 的上游用）</h2>
@@ -1457,7 +1499,10 @@ _SETTINGS_BODY = """
 
   <div class="row">
     <button class="pri" onclick="save()">保存全部</button>
-    <button onclick="addProv()">+ 新增上游</button>
+    <button onclick="addPreset('openai')">+ OpenAI 兼容接口</button>
+    <button onclick="addPreset('openrouter')">+ OpenRouter</button>
+    <button onclick="addPreset('ollama')">+ 本地 Ollama</button>
+    <button onclick="addProv()">+ 空白上游</button>
     <button onclick="loadCfg()">重新载入</button>
     <span class="sub" id="msg"></span>
   </div>
@@ -1483,6 +1528,7 @@ function provCard(p, i){
         <option value="http" ${p.type!=='opencode'?'selected':''}>http（OpenAI 兼容）</option>
         <option value="opencode" ${p.type==='opencode'?'selected':''}>opencode（本地 server）</option>
       </select>`)}
+    ${fld('免密钥', `<input type="checkbox" data-f="no_auth" ${p.no_auth?'checked':''}>`)}
     ${fld('接口', `<input data-f="base_url" value="${esc(p.base_url)}">`)}
     ${fld('模型', `<input data-f="model" value="${esc(p.model)}">`)}
     ${fld('校验串', `<input data-f="model_contains" value="${esc(p.model_contains)}" placeholder="留空 = 不校验">`)}
@@ -1492,7 +1538,7 @@ function provCard(p, i){
         <input type="number" data-f="free_quota_tokens" value="${p.free_quota_tokens||0}" placeholder="tokens，0=不限">`)}
     ${fld('价格/M', `<input type="number" step="0.0001" data-f="price_in" value="${p.price_in||0}" placeholder="输入">
         <input type="number" step="0.0001" data-f="price_out" value="${p.price_out||0}" placeholder="输出">`)}
-    ${fld('代理', `<input data-f="proxy" value="${esc(p.proxy)}" placeholder="留空 = 用全局">`)}
+    ${fld('代理', `<input data-f="proxy" value="${esc(p.proxy)}" placeholder="留空 = 用全局；可填 socks5://host:port">`)}
     ${fld('Key 变量', `<input data-f="api_key_env" value="${esc(p.api_key_env)}" placeholder="环境变量名">`)}
     ${fld('Key', `<input type="password" class="kval" data-env="${esc(p.api_key_env)}"
         placeholder="${esc(p._key_source||'无')}">`)}
@@ -1508,7 +1554,9 @@ function render(){
   document.getElementById('grid').innerHTML = CFG.providers.map(provCard).join('');
   document.getElementById('setStrat').value = CFG.strategy;
   document.getElementById('setCd').value = CFG.cooldown_seconds;
-  document.getElementById('setProxy').value = CFG.proxy || '';
+  const pr = parseProxy(CFG.proxy || '');
+  document.getElementById('setProxyScheme').value = pr.scheme;
+  document.getElementById('setProxyAddr').value = pr.addr;
   document.getElementById('setTok').placeholder =
     CFG.auth_enabled ? '已设置（留空不改）' : '留空 = 免口令';
   const oc = CFG.opencode || {};
@@ -1548,7 +1596,11 @@ function collect(){
   const body = {
     strategy: document.getElementById('setStrat').value,
     cooldown_seconds: Number(document.getElementById('setCd').value || 60),
-    proxy: document.getElementById('setProxy').value,
+    proxy: (function(){
+      const sc = document.getElementById('setProxyScheme').value;
+      const ad = (document.getElementById('setProxyAddr').value || '').trim();
+      return (sc && ad) ? (sc + '://' + ad) : '';
+    })(),
     providers: providers,
     secrets: secrets
   };
@@ -1571,6 +1623,38 @@ async function save(){
       msg('已保存并生效');
     } else { msg('保存失败：' + (d.error || '未知错误')); }
   }catch(e){ msg('保存失败：' + e.message); }
+}
+
+const PRESETS = {
+  openai: {name: 'openai-compatible', type: 'http', enabled: false, priority: 50,
+    base_url: 'https://api.example.com/v1', model: '', model_contains: '',
+    no_auth: false, free_only: false, free_quota_tokens: 0,
+    price_in: 0, price_out: 0, proxy: '', console_url: '',
+    api_key_env: 'OPENAI_API_KEY',
+    note: '任意 OpenAI 兼容接口：填 base_url / 模型 / Key 即可'},
+  openrouter: {name: 'openrouter-custom', type: 'http', enabled: false, priority: 55,
+    base_url: 'https://openrouter.ai/api/v1', model: '', model_contains: '',
+    no_auth: false, free_only: false, free_quota_tokens: 0,
+    price_in: 0, price_out: 0, proxy: '', console_url: 'https://openrouter.ai/keys',
+    api_key_env: 'OPENROUTER_API_KEY',
+    note: 'OpenRouter：一个 Key 打通 40+ 家 provider（需代理）'},
+  ollama: {name: 'ollama-local', type: 'http', enabled: false, priority: 20,
+    base_url: 'http://127.0.0.1:11434/v1', model: 'deepseek-r1:8b',
+    model_contains: '', no_auth: true, free_only: true, free_quota_tokens: 0,
+    price_in: 0, price_out: 0, proxy: '', console_url: 'https://ollama.com/library',
+    api_key_env: '',
+    note: '本地 Ollama / vLLM / LM Studio：无需 Key，填对接口和模型名即可'}
+};
+
+function addPreset(kind){
+  const t = PRESETS[kind];
+  if(!t) return;
+  const p = JSON.parse(JSON.stringify(t));
+  p._source = 'main';
+  p._key_source = p.no_auth ? '免密钥' : '无';
+  CFG.providers.push(p);
+  render();
+  msg('已添加模板：' + p.name + ' —— 改完点「保存全部」');
 }
 
 function addProv(){
@@ -1605,8 +1689,7 @@ function ocPaint(d){
                              : (d.installed ? '未运行' : '未安装');
   el.className = 'tag ' + (d.running ? 'g' : (d.installed ? 'y' : 'd'));
   document.getElementById('ocLog').textContent =
-    (d.last_error ? ('[错误] ' + d.last_error + '
-') : '') + (d.log || '(无日志)');
+    (d.last_error ? ('[错误] ' + d.last_error + ' | ') : '') + (d.log || '(无日志)');
   const env = document.getElementById('ocEnv');
   env.textContent = 'Node ' + (d.node_version || (d.node ? '?' : '未找到'))
     + (d.node ? ('（' + d.node + '）') : '')
