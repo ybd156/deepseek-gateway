@@ -162,14 +162,14 @@
       <div class="tablewrap">
         <table class="wide">
           <thead><tr>
-            <th>模型</th><th>上游</th><th>状态</th><th>上下文</th><th>图片</th>
-            <th>支持的档位</th><th>网关档位</th>
+            <th>模型</th><th>上游</th><th>状态</th><th>上下文</th>
+            <th>最大输出</th><th>图片</th><th>支持的档位</th><th>网关档位</th>
           </tr></thead>
           <tbody id="capsBody"></tbody>
         </table>
       </div>
       <div class="hint" style="margin-top:8px">
-        「状态」表示这个模型现在能不能真的调用（上游启用、有密钥、额度没爆）。不可用的不会出现在客户端的 /v1/models 里。
+        上下文与最大输出会一起下发给客户端（/v1/models 里同时给 context_length、max_output_tokens 等多种字段名）。「状态」表示这个模型现在能不能真的调用。不可用的不会出现在客户端的 /v1/models 里。
       </div>
     </section>
 
