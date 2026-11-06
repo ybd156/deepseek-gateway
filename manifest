@@ -1,5 +1,5 @@
 appname=deepseek-gateway
-version=2.7.1
+version=2.7.2
 display_name=DeepSeek 网关
 desc=把火山方舟、硅基流动、OpenRouter、腾讯 TokenHub、百度千帆、DeepSeek 官方等多个上游聚合成一个 OpenAI 兼容端点。<br>默认只启用免费上游，付费一律关闭；免费额度用尽自动停用，绝不静默转付费。<br>纯 Python 标准库实现，不依赖 Docker 与任何第三方包。
 source=thirdparty
@@ -13,4 +13,4 @@ desktop_applaunchname=deepseek-gateway.main
 service_port=18787
 checkport=true
 ctl_stop=true
-changelog=2.7.1：修复 opencode 命令行「装了却永远失败」的真正根因——网关把自己的环境变量（PORT / 代理 / PYTHON* 等）全传给了子进程，opencode 因此连 opencode.ai 时 ECONNREFUSED；现改为干净环境，免费模型在飞牛本机稳定可用（实测 DeepSeek V4.1 Flash 3.9s、GLM-5.3 Flash 5.8s 均 200）。同时不再强制 agent=plan（plan 会让 run 失败）。2.7.0：--standalone。2.6.x：登录向导与界面。2.5.x：opencode CLI。2.4.x：上游协议。1.1.0：免费优先。1.0.0：首个版本。
+changelog=2.7.2：修复「探测这个上游有哪些模型」对 opencode 上游报 JSONDecodeError——不再依赖 serve 的 /config/providers，改为跑 `opencode models`，并只保留该上游真正能用的命名空间（opencode/*；opencode-go/* 需要订阅，不再混入误填）。2.7.1：子进程干净环境修复 ECONNREFUSED。2.7.0：--standalone。2.6.x：登录向导与界面。2.5.x：opencode CLI。2.4.x：上游协议。1.1.0：免费优先。1.0.0：首个版本。
