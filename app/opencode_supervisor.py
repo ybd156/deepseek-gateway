@@ -198,11 +198,8 @@ class OpenCodeSupervisor:
         except Exception as exc:                    # noqa: BLE001
             return f"（读取失败：{exc}）"
 
-    def start_login(self, provider: str = "") -> tuple:
-        """在后台跑 `opencode auth login`，把授权链接/验证码写进日志。
-
-        auth login 需要交互式终端，所以用 script(1) 造一个伪终端。
-        """
+    def start_login(self, provider: str = "opencode") -> tuple:
+        """在真 PTY 里跑 `opencode auth login`：能看输出，也能给它按键。"""
         bin_path = self.resolve_bin()
         if not bin_path:
             return False, "没找到 opencode，先点「一键安装」"
@@ -214,23 +211,71 @@ class OpenCodeSupervisor:
         except Exception as exc:                    # noqa: BLE001
             return False, f"写日志失败：{exc}"
 
-        inner = bin_path + " auth login"
+        cmd = [bin_path, "auth", "login"]
         if provider:
-            inner += " " + provider
-        # Linux 上 script 可以造伪终端；没有就用普通管道（可能拿不到交互）
-        script_bin = shutil.which("script")
-        if script_bin:
-            cmd = [script_bin, "-qec", inner, "/dev/null"]
-        else:
-            cmd = ["bash", "-lc", inner]
+            cmd.append(provider)
+
+        try:
+            import pty
+        except Exception:                           # Windows 没有 pty
+            pty = None
+
+        if pty is not None:
+            try:
+                master, slave = pty.openpty()
+                proc = subprocess.Popen(cmd, stdin=slave, stdout=slave,
+                                        stderr=slave, env=env, cwd=ws,
+                                        start_new_session=True)
+                os.close(slave)
+                self._login = {"fd": master, "proc": proc}
+                threading.Thread(target=self._pump_login, args=(master,),
+                                 daemon=True).start()
+                return True, "已启动登录（PTY）。看「登录输出」，按提示点「发送回车/输入」"
+            except Exception as exc:                # noqa: BLE001
+                return False, f"启动 PTY 失败：{exc}"
+
+        # 没有 pty（Windows 开发机）：退化成普通后台进程
         try:
             with open(log_path, "ab") as lf:
                 subprocess.Popen(cmd, stdout=lf, stderr=subprocess.STDOUT,
                                  stdin=subprocess.DEVNULL, env=env, cwd=ws,
                                  start_new_session=True)
-            return True, "已在后台启动登录，稍等 2 秒看「登录输出」里的链接/验证码"
+            return True, "已启动登录（无 PTY，可能无法交互）"
         except Exception as exc:                    # noqa: BLE001
             return False, f"启动失败：{exc}"
+
+    def _pump_login(self, master) -> None:
+        """把 PTY 输出写进日志，直到进程结束。"""
+        log_path = self.login_log_path()
+        try:
+            while True:
+                try:
+                    data = os.read(master, 4096)
+                except OSError:
+                    break
+                if not data:
+                    break
+                with open(log_path, "ab") as fh:
+                    fh.write(data)
+        except Exception:
+            pass
+        finally:
+            try:
+                os.close(master)
+            except Exception:
+                pass
+
+    def send_login(self, text: str) -> tuple:
+        """往登录的 PTY 里写按键（回车用 \r）。"""
+        st = getattr(self, "_login", None) or {}
+        fd = st.get("fd")
+        if fd is None:
+            return False, "登录进程没在跑，先点「登录 OpenCode」"
+        try:
+            os.write(fd, text.encode("utf-8"))
+            return True, "已发送：" + repr(text)
+        except Exception as exc:                    # noqa: BLE001
+            return False, f"发送失败：{exc}"
 
     def cli_context(self) -> tuple:
         """给 `opencode run` 用的 (二进制, 工作目录, 环境变量)。"""
