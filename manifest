@@ -1,5 +1,5 @@
 appname=deepseek-gateway
-version=2.6.4
+version=2.6.5
 display_name=DeepSeek 网关
 desc=把火山方舟、硅基流动、OpenRouter、腾讯 TokenHub、百度千帆、DeepSeek 官方等多个上游聚合成一个 OpenAI 兼容端点。<br>默认只启用免费上游，付费一律关闭；免费额度用尽自动停用，绝不静默转付费。<br>纯 Python 标准库实现，不依赖 Docker 与任何第三方包。
 source=thirdparty
@@ -13,4 +13,4 @@ desktop_applaunchname=deepseek-gateway.main
 service_port=18787
 checkport=true
 ctl_stop=true
-changelog=2.6.4：登录改成向导——不再显示 TUI 乱码，直接告诉你「第几步、点哪个按钮」（第1步选服务、第2步选方式、第3步复制授权链接、完成/失败都有明确提示）；原始输出收进「高级」折叠区。2.6.3：一键选 Console/Go。2.6.2：真 PTY 登录。2.6.0：无头登录。2.5.8：opencode-zen 预设。2.5.x：opencode CLI。2.4.x：上游协议。1.1.0：免费优先。1.0.0：首个版本。
+changelog=2.6.5：登录向导里直接显示「当前屏幕」（清掉转义残渣后的当前提示行），不用再翻原始输出；日志清理再补一刀，清掉 ESC 丢失后残留的 [39m 之类碎片。2.6.4：登录向导。2.6.3：一键选 Console/Go。2.6.2：真 PTY。2.6.0：无头登录。2.5.8：opencode-zen 预设。2.5.x：opencode CLI。2.4.x：上游协议。1.1.0：免费优先。1.0.0：首个版本。
