@@ -166,6 +166,8 @@ class FakeOpenCode(BaseHTTPRequestHandler):
             parts = body.get("parts") or [{}]
             text = str(parts[0].get("text") or "")
             model = (body.get("model") or {}).get("modelID", "unknown")
+            if model == "hang-model":
+                time.sleep(6)        # 模拟 opencode 卡死：服务端已报错但不返回
             self._json(200, {
                 "info": {"modelID": model, "tokens": {"input": 12, "output": 7}},
                 "parts": [{"type": "text", "text": "OC[" + text[:24] + "]"}],
@@ -182,7 +184,8 @@ class FakeOpenCode(BaseHTTPRequestHandler):
         elif self.path == "/config/providers":
             self._json(200, {"providers": [{
                 "id": "opencode",
-                "models": {"deepseek-v4.1-flash-free": {}, "other-model": {}},
+                "models": {"deepseek-v4.1-flash-free": {}, "other-model": {},
+                           "hang-model": {}},
             }]})
         elif self.path == "/agent":
             self._json(200, [{"name": "build"}, {"name": "plan"}])
@@ -980,6 +983,28 @@ def main() -> int:
             d9 = json.loads(txt) if code == 200 else {}
             check(d9.get("ok") is True and want in str(d9.get("sample")),
                   f"{proto} 协议调通并转成 OpenAI 形状", str(d9.get("sample"))[:80])
+
+        print("== 29. opencode 卡死时把服务端原因带出来 ==")
+        logdir = os.path.join(data_dir, "home", ".local", "share", "opencode", "log")
+        os.makedirs(logdir, exist_ok=True)
+        with open(os.path.join(logdir, "t.log"), "w", encoding="utf-8") as fh:
+            fh.write('level=ERROR message="stream error" providerID=opencode '
+                     'error.error="AI_APICallError: Free usage limit reached. '
+                     'Free models work in OpenCode (https://opencode.ai)"' + chr(10))
+        with open(os.path.join(pd, "oc-hang.json"), "w", encoding="utf-8") as fh:
+            json.dump({"providers": [{
+                "name": "oc-hang", "type": "opencode", "enabled": False,
+                "priority": 95, "base_url": f"http://127.0.0.1:{OC_PORT}",
+                "model": "hang-model", "timeout": 2,
+                "free_only": True, "free_quota_tokens": 0,
+                "price_in": 0, "price_out": 0,
+            }]}, fh, ensure_ascii=False)
+        http("POST", base + "/admin/api/reload", {})
+        code, _, txt = http("POST", base + "/admin/api/probe", {"name": "oc-hang"})
+        d10 = json.loads(txt) if code == 200 else {}
+        err10 = str(d10.get("error") or "")
+        check(d10.get("ok") is False, "卡死被如实报告", err10[:100])
+        check("免费额度已用尽" in err10, "把服务端原因带出来了", err10[:160])
 
     finally:
         proc.terminate()
