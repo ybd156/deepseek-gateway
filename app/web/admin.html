@@ -62,6 +62,19 @@
             <button onclick="copyVal('epCurl','示例')">复制</button></div></div>
       </div>
 
+      <h2>网关信息（下发给客户端）</h2>
+      <div class="card">
+        <div class="hint" style="margin-bottom:10px">
+          客户端 GET <span class="mono">/v1/gateway</span> 就能拿到这些，不用猜网关支持什么。
+        </div>
+        <div class="inline" style="margin-bottom:8px">
+          <input id="gwInfoUrl" readonly>
+          <button onclick="copyVal('gwInfoUrl','网关信息地址')">复制</button>
+          <button onclick="loadGwInfo()">读取</button>
+        </div>
+        <pre id="gwInfo" style="max-height:220px">（点「读取」）</pre>
+      </div>
+
       <h2>上游状态</h2>
       <div class="row">
         <button onclick="refreshAll()">刷新</button>
@@ -134,8 +147,13 @@
 
       <div class="row" style="margin-top:0">
         <button onclick="loadCaps()">刷新</button>
+        <button class="pri" onclick="refreshCaps()">探测上游能力</button>
         <span class="msg" id="msgModels"></span>
         <span class="sub" id="capsSummary"></span>
+      </div>
+      <div class="hint" style="margin:-4px 0 10px">
+        网关会自动问每个上游「你有哪些模型、多大上下文」，拿到的就按真实值下发；
+        问不到的用内置表兜底。手填的值最优先。
       </div>
 
       <div class="card" style="margin-bottom:14px">
@@ -162,7 +180,7 @@
       <div class="tablewrap">
         <table class="wide">
           <thead><tr>
-            <th>模型</th><th>上游</th><th>状态</th><th>上下文</th>
+            <th>模型</th><th>上游</th><th>状态</th><th>来源</th><th>上下文</th>
             <th>最大输出</th><th>图片</th><th>支持的档位</th><th>网关档位</th>
           </tr></thead>
           <tbody id="capsBody"></tbody>
