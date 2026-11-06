@@ -407,7 +407,8 @@ OpenCode 的免费 DeepSeek **不能直接当 API 调**（外部请求返回 `40
 | `base_url` | `opencode serve` 的地址 |
 | `model` | `deepseek-v4.1-flash-free`（免费档） |
 | `opencode_provider` | 模型所属 provider，默认 `opencode` |
-| `opencode_agent` | 可选，指定 agent（如只读的 `plan`），默认用 OpenCode 默认 agent |
+| `opencode_agent` | agent 名。**默认 `plan`（只读）**——`build` 带全套写工具，容易自己循环到超时 |
+| `timeout` | 默认 300 秒（agent 循环本来就慢） |
 | `opencode_tools` | 可选，传给 OpenCode 的 `tools` 字段，用来收紧工具权限 |
 | `opencode_extra` | 可选，原样并入 `/session/{id}/message` 请求体 |
 
