@@ -1,5 +1,5 @@
 appname=deepseek-gateway
-version=2.2.1
+version=2.3.0
 display_name=DeepSeek 网关
 desc=把火山方舟、硅基流动、OpenRouter、腾讯 TokenHub、百度千帆、DeepSeek 官方等多个上游聚合成一个 OpenAI 兼容端点。<br>默认只启用免费上游，付费一律关闭；免费额度用尽自动停用，绝不静默转付费。<br>纯 Python 标准库实现，不依赖 Docker 与任何第三方包。
 source=thirdparty
@@ -13,4 +13,4 @@ desktop_applaunchname=deepseek-gateway.main
 service_port=18787
 checkport=true
 ctl_stop=true
-changelog=2.2.1：修复 /v1/models 用错鉴权——之前它只认主口令/网关登录态，导致用「访问令牌」的客户端拉模型列表一律 401（聊天却正常）。现在和 /v1/chat/completions 用同一套鉴权：主口令或任意启用的令牌都行。2.2.0：设置拆成四个独立页 + 单张上游保存。2.1.x：多模型与模型探测。2.0.0：界面重做。1.1.0：免费优先。1.0.0：首个版本。
+changelog=2.3.0：新增「日志」页——调用日志（时间/上游/模型/令牌/成功失败/输入输出 tokens/花费/耗时/错误，可自动刷新）和网关日志（app.log 尾部，带路径）；修复设置页子路径下 BASE 计算错误；清掉网关日志里的 Python SyntaxWarning。2.2.1：修复 /v1/models 鉴权。2.2.0：设置拆四页 + 单卡保存。2.1.x：多模型与探测。2.0.0：界面重做。1.1.0：免费优先。1.0.0：首个版本。
