@@ -440,6 +440,43 @@ def main() -> int:
         code, _, _ = http("GET", base + "/admin/api/status")
         check(code == 200, "清除口令后恢复免口令", str(code))
 
+        print("== 12. 设置页整页读写（/admin/api/config）==")
+        code, _, txt = http("GET", base + "/admin/api/config")
+        cfg = json.loads(txt) if code == 200 else {}
+        check(code == 200 and len(cfg.get("providers", [])) >= 3, "读取配置快照", str(code))
+        names = [p["name"] for p in cfg.get("providers", [])]
+        check("good" in names and "_source" in (cfg["providers"][0] if cfg.get("providers") else {}),
+              "快照带 _source 标记", str(names[:5]))
+
+        # 改一个上游的 base_url + 全局代理，整页存回去
+        for p in cfg["providers"]:
+            if p["name"] == "good":
+                p["note"] = "改过的备注"
+                p["price_in"] = 0.0123
+        body = {
+            "strategy": "priority",
+            "cooldown_seconds": 7,
+            "proxy": "http://127.0.0.1:7890",
+            "providers": cfg["providers"],
+            "secrets": {"TEST_KEY_X": "sk-roundtrip"},
+        }
+        code, _, txt = http("POST", base + "/admin/api/config", body)
+        d = json.loads(txt) if code == 200 else {}
+        check(code == 200 and d.get("ok"), "整页保存成功", txt[:160])
+        check(d.get("cooldown_seconds") == 7 and d.get("proxy") == "http://127.0.0.1:7890",
+              "全局设置已生效", f"{d.get('cooldown_seconds')} / {d.get('proxy')}")
+        saved = next((p for p in d.get("providers", []) if p["name"] == "good"), {})
+        check(saved.get("note") == "改过的备注" and abs(saved.get("price_in", 0) - 0.0123) < 1e-9,
+              "上游字段已落盘", str(saved.get("note")))
+        kt = next((p for p in d.get("providers", []) if p["name"] == "keytest"), {})
+        check(kt.get("_key_source") == "面板", "密钥来源反映为面板",
+              str(kt.get("_key_source")))
+
+        # 非法策略要被挡住
+        code, _, _ = http("POST", base + "/admin/api/config",
+                          {"strategy": "nope", "providers": cfg["providers"]})
+        check(code == 400, "非法策略被拒绝", str(code))
+
     finally:
         proc.terminate()
         try:
