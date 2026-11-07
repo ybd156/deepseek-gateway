@@ -417,13 +417,17 @@ class OpenCodeSupervisor:
         except Exception as exc:                    # noqa: BLE001
             return False, f"发送失败：{exc}"
 
-    def cli_context(self) -> tuple:
+    def cli_context(self, mode: str = "chat") -> tuple:
         # 子进程用干净环境。网关自身的环境变量（PORT、代理、PYTHON* 等）
         # 会被 opencode 误用 —— 实测会表现为连 opencode.ai 时 ECONNREFUSED，
         # 而同样的命令在干净环境下手动跑完全正常。
         bin_path = self.resolve_bin()
         opts = self.get_opts() or {}
-        ws = str(opts.get("workspace") or os.path.join(self.data_dir, "opencode-workspace"))
+        base_ws = str(opts.get("workspace")
+                      or os.path.join(self.data_dir, "opencode-workspace"))
+        # 两套目录：chat 禁工具，agent 放工具。分开就不会互相覆盖配置。
+        mode = "agent" if str(mode).lower() == "agent" else "chat"
+        ws = os.path.join(base_ws, mode)
         home = os.path.join(self.data_dir, "home")
         for d in (ws, home, os.path.join(home, ".config"),
                   os.path.join(home, ".local", "share"),
@@ -439,12 +443,20 @@ class OpenCodeSupervisor:
         #   2. tools 显式关闭
         #   3. AGENTS.md 里用自然语言再说一遍
         cfg_path = os.path.join(ws, "opencode.json")
-        cfg_want = {
-            "$schema": "https://opencode.ai/config.json",
-            "permission": {"edit": "deny", "bash": "deny", "webfetch": "deny"},
-            "tools": {"bash": False, "edit": False, "write": False,
-                      "webfetch": False, "patch": False, "read": False},
-        }
+        if mode == "agent":
+            cfg_want = {
+                "$schema": "https://opencode.ai/config.json",
+                "permission": {"edit": "allow", "bash": "allow",
+                               "webfetch": "allow"},
+            }
+        else:
+            cfg_want = {
+                "$schema": "https://opencode.ai/config.json",
+                "permission": {"edit": "deny", "bash": "deny",
+                               "webfetch": "deny"},
+                "tools": {"bash": False, "edit": False, "write": False,
+                          "webfetch": False, "patch": False, "read": False},
+            }
         try:
             old_cfg = {}
             if os.path.exists(cfg_path):
@@ -460,13 +472,20 @@ class OpenCodeSupervisor:
             pass
 
         agents_md = os.path.join(ws, "AGENTS.md")
-        agents_text = (
-            "你是通过 API 网关转发的纯文本对话助手。\n\n"
-            "- 不要调用任何工具（bash / read / edit / write / webfetch / patch）。\n"
-            "- 不要查看、搜索或修改工作目录里的任何文件。\n"
-            "- 不要执行命令，也不要探索项目结构。\n"
-            "- 直接根据用户消息用文字回答。\n"
-        )
+        if mode == "agent":
+            agents_text = (
+                "你可以使用工具（bash / read / edit / write）来完成任务。\n"
+                "先看清楚需求再动手；改文件前先读一遍；做完简要说明改了什么。\n"
+                "当前目录就是你唯一的工作区，不要越界到上级目录。\n"
+            )
+        else:
+            agents_text = (
+                "你是通过 API 网关转发的纯文本对话助手。\n\n"
+                "- 不要调用任何工具（bash / read / edit / write / webfetch / patch）。\n"
+                "- 不要查看、搜索或修改工作目录里的任何文件。\n"
+                "- 不要执行命令，也不要探索项目结构。\n"
+                "- 直接根据用户消息用文字回答。\n"
+            )
         try:
             cur = ""
             if os.path.exists(agents_md):
