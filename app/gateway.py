@@ -732,6 +732,14 @@ class ProviderError(Exception):
     """上游调用失败。"""
 
 
+class QuotaExhausted(ProviderError):
+    """免费额度用尽。retry_after 是服务端给的恢复秒数（拿不到就给默认值）。"""
+
+    def __init__(self, message: str, retry_after: int = 3600) -> None:
+        super().__init__(message)
+        self.retry_after = max(30, int(retry_after or 3600))
+
+
 def apply_request_policy(payload: dict) -> tuple:
     """按面板策略改写请求。返回 (新 payload, 错误或 None)。"""
     msgs = payload.get("messages")
@@ -1088,6 +1096,23 @@ def render_prompt(payload: dict) -> str:
 _OC_SEM = threading.Semaphore(2)
 
 
+def _retry_after(text: str) -> int:
+    """从上游输出里找「多久后恢复」。拿不到返回 0。"""
+    import re as _re
+    low = (text or "").lower()
+    for pat in (r"retry[_-]?after[^0-9]{0,10}(\d{2,7})",
+                r"reset[^0-9]{0,12}(\d{2,7})",
+                r"(\d{2,7})\s*秒后",
+                r"(\d{2,7})\s*seconds?"):
+        m = _re.search(pat, low)
+        if m:
+            try:
+                return int(m.group(1))
+            except Exception:
+                pass
+    return 0
+
+
 def _tail_text(path: str, limit: int = 400) -> str:
     try:
         with open(path, "rb") as fh:
@@ -1170,9 +1195,22 @@ def call_opencode_cli(p: dict, payload: dict) -> tuple:
 
     blob = (out + " " + err).lower()
     if "usage limit" in blob or "freeusage" in blob:
-        raise ProviderError(
+        wait = _retry_after(err + " " + out)
+        human = ""
+        if wait:
+            if wait >= 3600:
+                human = f"约 {wait // 3600} 小时 {wait % 3600 // 60} 分钟后恢复"
+            elif wait >= 60:
+                human = f"约 {wait // 60} 分钟后恢复"
+            else:
+                human = f"约 {wait} 秒后恢复"
+        raise QuotaExhausted(
             "OpenCode 免费额度已用尽（服务端返回 FreeUsageLimitError）。"
-            "免费模型有每日配额，用尽后需等重置或改用有 Key 的上游。")
+            "这是 OpenCode 侧的每日配额，不是网关限制——"
+            "网关的「自检」「试一句」和正常对话都算在同一次额度里。"
+            + (f"{human}。" if human else "通常按天重置。")
+            + " 想马上能用：配一个有 Key 的上游（硅基流动 / 火山方舟 / DeepSeek 官方）当主力。",
+            wait or 3600)
 
     if timed_out:
         tail = (err or out or "").strip()[-300:]
@@ -1327,7 +1365,11 @@ def skip_report() -> list:
             continue
         cd = STATE.get(p["name"], {}).get("cooldown_until", 0)
         if cd > now():
-            out.append(f"{p['name']}：冷却中，还剩 {int(cd - now())} 秒")
+            left = int(cd - now())
+            if left > 600:
+                out.append(f"{p['name']}：额度/故障冷却中，约 {left // 60} 分钟后恢复")
+            else:
+                out.append(f"{p['name']}：冷却中，还剩 {left} 秒")
             continue
         if is_exhausted(p, used):
             out.append(f"{p['name']}：免费额度已用尽")
@@ -1396,11 +1438,12 @@ def mark_ok(p: dict) -> None:
         STATE[p["name"]] = {"cooldown_until": 0, "fails": 0}
 
 
-def mark_fail(p: dict) -> None:
+def mark_fail(p: dict, cooldown: int = 0) -> None:
+    """记一次失败。cooldown>0 时用它代替默认冷却（额度用尽要用恢复时间）。"""
     with STATE_LOCK:
         st = STATE.setdefault(p["name"], {})
         st["fails"] = st.get("fails", 0) + 1
-        st["cooldown_until"] = now() + RUNTIME["cooldown"]
+        st["cooldown_until"] = now() + max(1, int(cooldown or RUNTIME["cooldown"]))
 
 
 # ─────────────────────────── HTTP ───────────────────────────
@@ -2049,7 +2092,7 @@ class Handler(BaseHTTPRequestHandler):
                 return
             except Exception as exc:                   # noqa: BLE001
                 msg = err_text(exc)
-                mark_fail(p)
+                mark_fail(p, getattr(exc, "retry_after", 0))
                 record(p["name"], payload.get("_echo_model") or p["model"],
                        0, 0, 0.0, False, int((now() - t0) * 1000), msg,
                        extra={
@@ -2120,7 +2163,7 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 data, warn = call_provider(p, payload)
             except Exception as exc:                   # noqa: BLE001
-                mark_fail(p)
+                mark_fail(p, getattr(exc, "retry_after", 0))
                 record(p["name"], payload.get("_echo_model") or p["model"],
                        0, 0, 0.0, False, int((now() - t0) * 1000),
                        err_text(exc), extra={
