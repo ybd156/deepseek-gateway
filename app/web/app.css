@@ -126,5 +126,6 @@ table.caps .c-v{width:52px;text-align:center}
 .taglist{font-size:11px;line-height:1.35;color:var(--dim);white-space:normal;max-width:120px}
 
 /* 失败行直接把错误摆出来，不用悬停 */
-.errline{color:var(--err);font-size:11px;line-height:1.35;margin-top:3px;
-  max-width:230px;white-space:normal;word-break:break-word}
+.errline{color:var(--err);font-size:11px;line-height:1.4;margin-top:3px;
+  max-width:300px;white-space:normal;word-break:break-word;overflow-wrap:anywhere}
+table.wide td:nth-child(2){min-width:150px}
