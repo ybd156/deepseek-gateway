@@ -375,7 +375,13 @@ function provCard(p, i) {
       + '<input data-f="opencode_provider" value="' + esc(p.opencode_provider || 'opencode') + '"></div>'
       + '<div class="field"><label>agent</label>'
       + '<input data-f="opencode_agent" value="' + esc(p.opencode_agent || '') + '" placeholder="留空 = 默认">'
-      + '<div class="hint">建议留空</div></div></div>';
+      + '<div class="hint">建议留空</div></div></div>'
+      + '<div class="field"><label>这个上游默认怎么用</label>'
+      + '<label class="chk"><input type="checkbox" data-f="opencode_tools"'
+      + (p.opencode_tools ? ' checked' : '') + '> 允许模型使用工具（读文件 / 改文件 / 执行命令）</label>'
+      + '<div class="hint">不勾 = 纯聊天，回答快、不会被 agent 循环拖到超时；'
+      + '勾上 = 代理模式，模型能真的动手做事（更慢，建议 timeout 调到 300 以上）。'
+      + '单次请求也可以用请求头 <span class="mono">X-Gateway-Tools: 1</span> 临时打开。</div></div>';
   } else {
     h += '<div class="f2">'
       + '<div class="field"><label>密钥</label>'
