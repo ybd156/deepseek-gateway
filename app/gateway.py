@@ -1986,13 +1986,29 @@ class Handler(BaseHTTPRequestHandler):
                 record(p["name"], p["model"], 0, 0, 0.0, False,
                        int((now() - t0) * 1000), err_text(exc))
                 continue
+            # 兜底流式：也要按「客户端点名」记账，否则日志看起来像换了模型
+            echo = payload.get("_echo_model") or ""
+            if echo:
+                data["model"] = echo
+            sent = str(data.get("_upstream") or "") or                 str(payload.get("_route_model") or p["model"])
             self._emit(data, p, warn)
-            u = data.get("usage") or {}
-            record(p["name"], p["model"], int(u.get("prompt_tokens") or 0),
-                   int(u.get("completion_tokens") or 0),
-                   cost_of(p, int(u.get("prompt_tokens") or 0),
-                           int(u.get("completion_tokens") or 0)),
-                   True, int((now() - t0) * 1000), warn)
+            u = usage_of(data)
+            ms = int((now() - t0) * 1000)
+            record(p["name"], echo or p["model"], u["in"], u["out"],
+                   cost_of(p, u["in"], u["out"]), True, ms, warn,
+                   extra={
+                       "first_byte_ms": ms,
+                       "stream": 1,
+                       "cache_hit": u["cache_hit"],
+                       "cache_miss": u["cache_miss"],
+                       "client_ip": client_ip(self),
+                       "user_agent": self.headers.get("User-Agent") or "",
+                       "effort": str(payload.get("reasoning_effort") or ""),
+                       "upstream_model": sent,
+                       "request_id": str(data.get("id") or ""),
+                       "status": 200,
+                       "source": "chat",
+                   })
             mark_ok(p)
             return
         if want and not candidates(strategy, want):
