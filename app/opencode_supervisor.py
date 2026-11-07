@@ -432,16 +432,51 @@ class OpenCodeSupervisor:
                 os.makedirs(d, exist_ok=True)
             except Exception:
                 pass
+        # 网关是「聊天转发」，不是「编码代理」。
+        # 如果放任它用工具，模型会去 ls / git log 探索工作目录，一条「你好」
+        # 也要跑几十条命令，最后卡到超时。这里三重把关：
+        #   1. opencode.json 里把工具权限设成 deny
+        #   2. tools 显式关闭
+        #   3. AGENTS.md 里用自然语言再说一遍
         cfg_path = os.path.join(ws, "opencode.json")
-        if not os.path.exists(cfg_path):
-            try:
+        cfg_want = {
+            "$schema": "https://opencode.ai/config.json",
+            "permission": {"edit": "deny", "bash": "deny", "webfetch": "deny"},
+            "tools": {"bash": False, "edit": False, "write": False,
+                      "webfetch": False, "patch": False, "read": False},
+        }
+        try:
+            old_cfg = {}
+            if os.path.exists(cfg_path):
+                try:
+                    with open(cfg_path, encoding="utf-8") as fh:
+                        old_cfg = json.load(fh) or {}
+                except Exception:
+                    old_cfg = {}
+            if old_cfg != cfg_want:
                 with open(cfg_path, "w", encoding="utf-8") as fh:
-                    json.dump({"$schema": "https://opencode.ai/config.json",
-                               "permission": {"edit": "allow", "bash": "allow",
-                                              "webfetch": "allow"}},
-                              fh, ensure_ascii=False, indent=2)
-            except Exception:
-                pass
+                    json.dump(cfg_want, fh, ensure_ascii=False, indent=2)
+        except Exception:
+            pass
+
+        agents_md = os.path.join(ws, "AGENTS.md")
+        agents_text = (
+            "你是通过 API 网关转发的纯文本对话助手。\n\n"
+            "- 不要调用任何工具（bash / read / edit / write / webfetch / patch）。\n"
+            "- 不要查看、搜索或修改工作目录里的任何文件。\n"
+            "- 不要执行命令，也不要探索项目结构。\n"
+            "- 直接根据用户消息用文字回答。\n"
+        )
+        try:
+            cur = ""
+            if os.path.exists(agents_md):
+                with open(agents_md, encoding="utf-8") as fh:
+                    cur = fh.read()
+            if cur != agents_text:
+                with open(agents_md, "w", encoding="utf-8") as fh:
+                    fh.write(agents_text)
+        except Exception:
+            pass
         path_parts = []
         if bin_path:
             path_parts.append(os.path.dirname(bin_path))
