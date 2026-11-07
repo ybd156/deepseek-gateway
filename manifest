@@ -1,5 +1,5 @@
 appname=deepseek-gateway
-version=3.2.2
+version=3.2.3
 display_name=AI 网关
 desc=把多个模型服务商聚合成一个 OpenAI 兼容接口，跑在自己的飞牛 NAS 上。<br>支持 OpenAI Chat / Responses / Anthropic / Gemini 四种上游协议，失败自动切换下一家。<br>带用量统计（按天、按上游）、访问令牌、调用日志、出站品牌词脱敏、本地 opencode 托管。<br>免费额度可硬卡，用尽自动停用，绝不静默转付费。纯 Python 标准库，零第三方依赖，零 Docker。
 source=thirdparty
@@ -14,4 +14,4 @@ desktop_applaunchname=deepseek-gateway.main
 service_port=18787
 checkport=true
 ctl_stop=true
-changelog=3.2.2：工具不再一刀切禁掉，改成可切换。上游卡片新增「允许模型使用工具」——不勾是纯聊天（禁工具、回答快），勾上是代理模式（能读写文件、执行命令）；单次请求还能用请求头 X-Gateway-Tools: 1/0 临时切换。聊天与代理各用一套独立工作目录，配置互不覆盖。3.2.1：禁工具修超时。3.2.0：超时可查。3.1.0：双向能力互通。3.0.0：整体重写。
+changelog=3.2.3：免费额度用尽不再反复撞——按服务端给的重置时间自动停用，并明确写出「约 X 小时 Y 分钟后恢复」，同时说明这是 OpenCode 侧的每日配额，网关的「自检」「试一句」和正常对话都算在同一次额度里（这两个按钮也加了提示）。3.2.2：工具可切换（聊天/代理）。3.2.1：禁工具修超时。3.1.0：双向能力互通。3.0.0：整体重写。
