@@ -1101,7 +1101,12 @@ def _tail_text(path: str, limit: int = 400) -> str:
 
 
 def call_opencode_cli(p: dict, payload: dict) -> tuple:
-    bin_path, ws, env = SUPERVISOR.cli_context()
+    # 模式：请求里显式指定 > 该上游配置 > 默认聊天
+    if "_agent_mode" in payload:
+        agent_mode = bool(payload.get("_agent_mode"))
+    else:
+        agent_mode = bool(p.get("opencode_tools"))
+    bin_path, ws, env = SUPERVISOR.cli_context("agent" if agent_mode else "chat")
     if not bin_path:
         raise ProviderError("没找到 opencode 可执行文件：先在设置页点「一键安装」")
 
@@ -1158,6 +1163,7 @@ def call_opencode_cli(p: dict, payload: dict) -> tuple:
 
     # 把「跑了什么、卡在哪」写进网关日志，下次超时不用猜
     print(f"[opencode-cli] rc={rc} {ms}ms timeout={timed_out} "
+          f"mode={'agent' if agent_mode else 'chat'} "
           f"model={model_arg} out={len(out)}B err={len(err)}B", flush=True)
     if timed_out and (err or out):
         print(f"[opencode-cli] 超时前输出：{(err or out)[-500:]}", flush=True)
@@ -1979,6 +1985,15 @@ class Handler(BaseHTTPRequestHandler):
                     or RUNTIME["strategy"] or "priority").lower()
         if strategy not in ("priority", "cheapest"):
             strategy = "priority"
+
+        # 允许单次请求切换「是否让模型用工具」：
+        #   X-Gateway-Tools: 1  → 代理模式（可读写文件、执行命令）
+        #   X-Gateway-Tools: 0  → 强制纯聊天
+        tools_hdr = str(self.headers.get("X-Gateway-Tools") or "").strip().lower()
+        if tools_hdr in ("1", "true", "yes", "on"):
+            payload["_agent_mode"] = True
+        elif tools_hdr in ("0", "false", "no", "off"):
+            payload["_agent_mode"] = False
 
         # 客户端原始点名的模型，响应里要原样回显
         original_model = str(payload.get("model") or "").strip()
@@ -2990,6 +3005,7 @@ def opencode_view() -> dict:
     }
     st["cli_mode"] = cli_mode
     st["has_opencode_provider"] = bool(oc)
+    st["agent_providers"] = [x["name"] for x in oc if x.get("opencode_tools")]
     st["needs_server"] = not cli_mode
     st["needs_login"] = False if cli_mode else True
     st["ready"] = bool(st.get("installed")) and (cli_mode or st.get("running"))
