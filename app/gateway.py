@@ -1976,21 +1976,38 @@ class Handler(BaseHTTPRequestHandler):
                     mark_ok(p)
                     return
                 mark_fail(p)
-                record(p["name"], p["model"], 0, 0, 0.0, False,
-                       int((now() - t0) * 1000), "流式转发失败")
+                record(p["name"], payload.get("_echo_model") or p["model"],
+                       0, 0, 0.0, False, int((now() - t0) * 1000),
+                       "流式转发失败", extra={
+                           "stream": 1, "status": 502, "source": "chat",
+                           "client_ip": client_ip(self),
+                           "user_agent": self.headers.get("User-Agent") or "",
+                           "effort": str(payload.get("reasoning_effort") or ""),
+                           "upstream_model": str(payload.get("_route_model")
+                                                 or p["model"]),
+                       })
                 continue
             try:
                 data, warn = call_provider(p, payload)
             except Exception as exc:                   # noqa: BLE001
                 mark_fail(p)
-                record(p["name"], p["model"], 0, 0, 0.0, False,
-                       int((now() - t0) * 1000), err_text(exc))
+                record(p["name"], payload.get("_echo_model") or p["model"],
+                       0, 0, 0.0, False, int((now() - t0) * 1000),
+                       err_text(exc), extra={
+                           "stream": 1, "status": 502, "source": "chat",
+                           "client_ip": client_ip(self),
+                           "user_agent": self.headers.get("User-Agent") or "",
+                           "effort": str(payload.get("reasoning_effort") or ""),
+                           "upstream_model": str(payload.get("_route_model")
+                                                 or p["model"]),
+                       })
                 continue
             # 兜底流式：也要按「客户端点名」记账，否则日志看起来像换了模型
             echo = payload.get("_echo_model") or ""
             if echo:
                 data["model"] = echo
-            sent = str(data.get("_upstream") or "") or                 str(payload.get("_route_model") or p["model"])
+            sent = (str(data.get("_upstream") or "")
+                    or str(payload.get("_route_model") or p["model"]))
             self._emit(data, p, warn)
             u = usage_of(data)
             ms = int((now() - t0) * 1000)
