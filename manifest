@@ -1,5 +1,5 @@
 appname=deepseek-gateway
-version=3.1.9
+version=3.2.0
 display_name=AI 网关
 desc=把多个模型服务商聚合成一个 OpenAI 兼容接口，跑在自己的飞牛 NAS 上。<br>支持 OpenAI Chat / Responses / Anthropic / Gemini 四种上游协议，失败自动切换下一家。<br>带用量统计（按天、按上游）、访问令牌、调用日志、出站品牌词脱敏、本地 opencode 托管。<br>免费额度可硬卡，用尽自动停用，绝不静默转付费。纯 Python 标准库，零第三方依赖，零 Docker。
 source=thirdparty
@@ -14,4 +14,4 @@ desktop_applaunchname=deepseek-gateway.main
 service_port=18787
 checkport=true
 ctl_stop=true
-changelog=3.1.9：修掉一个会误导人的报错——上游超时进入冷却后，下一次请求被回成「没有上游支持模型 xxx」，而同一个报错里列出的可用模型就包含 xxx。现在区分两种情况：真没这个模型 → 400 并列出可用模型；上游都在冷却/额度用尽 → 503 并说明还剩几秒。提示里的可用模型也只看启用且有密钥的上游。3.1.8：失败记账与错误内联。3.1.7：兜底流式记账。3.1.0：双向能力互通。3.0.0：整体重写。
+changelog=3.2.0：opencode 卡住时能查了——超时会把「超时前的输出」带进错误信息，设置页新增「上一次 opencode run 的输出」，网关日志也会打印 rc/耗时/输出字节数；超时用进程组 kill，不会留下孤儿进程；同时限制最多 2 个并发，避免多个 opencode 抢资源。顺手修掉失败错误被挤成竖排的显示问题。3.1.9：区分冷却与模型不存在。3.1.8：失败记账。3.1.0：双向能力互通。3.0.0：整体重写。
