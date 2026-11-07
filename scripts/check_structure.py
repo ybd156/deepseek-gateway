@@ -254,6 +254,19 @@ def main() -> int:
     except Exception as exc:                           # noqa: BLE001
         check(False, "应用信息检查", str(exc))
 
+    print("== 7g. 记账口径（三种路径都要记客户端点名）==")
+    try:
+        gw = open(os.path.join("app", "gateway.py"), encoding="utf-8").read()
+        check('payload.get("_echo_model") or p["model"]' in gw,
+              "非流式按客户端点名记账")
+        check("record(p[\"name\"], echo or p[\"model\"]" in gw,
+              "兜底流式按客户端点名记账")
+        check(gw.count('"upstream_model"') >= 3, "三条路径都记上游实际模型",
+              str(gw.count('"upstream_model"')))
+        check('"source": "probe"' in gw, "自检有单独标记")
+    except Exception as exc:                           # noqa: BLE001
+        check(False, "记账口径检查", str(exc))
+
     print("== 8. 图标尺寸 ==")
     try:
         from PIL import Image
