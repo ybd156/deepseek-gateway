@@ -1210,6 +1210,46 @@ def check_model(p: dict, data: dict) -> str:
 
 
 # ─────────────────────────── 路由 ───────────────────────────
+def route_failure(want: str, strategy: str) -> tuple | None:
+    """请求一个都没发出去时，判断到底是哪种情况。
+
+    返回 (状态码, 说明, 类型) 或 None（交给通用的「没有可用上游」）。
+    """
+    if not want:
+        return None
+
+    servable = servable_providers(want)
+    live = candidates(strategy, want)
+
+    if not servable:
+        # 真的没有任何上游认这个模型
+        avail = all_models(only_usable=True) or all_models()
+        msg = (f"没有上游支持模型 {want}。可用模型："
+               + "、".join(avail[:12])
+               + ("…" if len(avail) > 12 else "")
+               + "　（在上游卡片里勾「允许任意模型名」可以强制透传）")
+        return (400, msg, "model_not_found")
+
+    if live:
+        return None                      # 有可用的，交给正常流程
+
+    # 有上游能接，但都被冷却 / 额度卡住了
+    used = used_tokens()
+    parts = []
+    for p in servable:
+        cd = STATE.get(p["name"], {}).get("cooldown_until", 0)
+        if cd > now():
+            parts.append(f"{p['name']}：冷却中，还剩 {int(cd - now())} 秒")
+        elif is_exhausted(p, used):
+            parts.append(f"{p['name']}：免费额度已用尽")
+        else:
+            parts.append(f"{p['name']}：暂不可用")
+    msg = (f"模型 {want} 的上游暂时都不可用。"
+           + "；".join(parts)
+           + "。稍等再试，或到「上游」页调大失败冷却时间/启用备用上游。")
+    return (503, msg, "upstream_unavailable")
+
+
 def skip_report() -> list:
     used = used_tokens()
     out = []
@@ -1231,10 +1271,30 @@ def skip_report() -> list:
     return out
 
 
-def all_models() -> list:
-    """全站能点的模型名（去重，保持顺序）。"""
+def servable_providers(want: str) -> list:
+    """能接这个模型的上游（不管是不是在冷却、额度有没有用尽）。"""
+    if not want:
+        return []
+    return [
+        p for p in PROVIDERS
+        if p["enabled"]
+        and (p["api_key"] or p["type"] == "opencode" or p["no_auth"])
+        and can_serve(p, want)
+    ]
+
+
+def all_models(only_usable: bool = False) -> list:
+    """全站能点的模型名。
+
+    only_usable=True 时只列「启用且有密钥」的上游，避免提示里出现
+    一堆点了也用不了的名字。
+    """
     seen, out = set(), []
     for p in PROVIDERS:
+        if only_usable and not (p["enabled"]
+                                and (p["api_key"] or p["type"] == "opencode"
+                                     or p["no_auth"])):
+            continue
         for m in declared_models(p):
             if m.lower() not in seen:
                 seen.add(m.lower())
@@ -1929,14 +1989,10 @@ class Handler(BaseHTTPRequestHandler):
                 last = msg
 
         if not tried:
-            if want and not candidates(strategy, want):
-                avail = all_models()
-                head = (f"没有上游支持模型 {want}。可用模型："
-                        + "、".join(avail[:12])
-                        + ("…" if len(avail) > 12 else "")
-                        + "　（在上游卡片里勾「允许任意模型名」可以强制透传）")
-                self.send_json(400, {"error": {"message": head,
-                                               "type": "model_not_found"}})
+            reason = route_failure(want, strategy)
+            if reason:
+                self.send_json(reason[0], {"error": {"message": reason[1],
+                                                     "type": reason[2]}})
                 return
             head = "没有可用上游。" + "；".join(skip_report()[:8])
         else:
@@ -2028,13 +2084,10 @@ class Handler(BaseHTTPRequestHandler):
                    })
             mark_ok(p)
             return
-        if want and not candidates(strategy, want):
-            avail = all_models()
-            head = (f"没有上游支持模型 {want}。可用模型："
-                    + "、".join(avail[:12])
-                    + ("…" if len(avail) > 12 else ""))
-            self.send_json(400, {"error": {"message": head,
-                                           "type": "model_not_found"}})
+        reason = route_failure(want, strategy)
+        if reason:
+            self.send_json(reason[0], {"error": {"message": reason[1],
+                                                 "type": reason[2]}})
             return
         head = "没有可用上游。" + "；".join(skip_report()[:8])
         self.send_json(502, {"error": {"message": head, "type": "gateway_error"}})
