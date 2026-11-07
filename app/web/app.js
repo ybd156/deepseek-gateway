@@ -155,6 +155,9 @@ async function loadStatus() {
       if (!p.enabled) { st = '已停用'; cls = 'd'; }
       else if (!p.has_key) { st = '缺密钥'; cls = 'd'; }
       else if (p.exhausted) { st = '额度用尽'; cls = 'r'; }
+      else if (p.cooldown > 600) {
+        st = '冷却 ' + Math.round(p.cooldown / 60) + ' 分钟'; cls = 'r';
+      }
       else if (p.cooldown > 0) { st = '冷却 ' + p.cooldown + 's'; cls = 'r'; }
       else if (p.fails > 0) { st = '重试中'; cls = 'y'; }
       else { st = '正常'; cls = 'g'; }
@@ -186,7 +189,8 @@ async function loadStatus() {
         + '<td class="nowrap">' + p.requests_24h + '</td>'
         + '<td class="mono nowrap">$' + p.cost_24h.toFixed(4) + '</td>'
         + '<td class="nowrap">' + btn
-        + ' <button data-n="' + esc(p.name) + '" onclick="probeProv(this)">自检</button></td>'
+        + ' <button data-n="' + esc(p.name) + '" onclick="probeProv(this)"'
+        + ' title="真发一次请求。免费上游会消耗一次额度">自检</button></td>'
         + '<td><span class="err" title="' + esc(p.last_error) + '">'
         + (esc(p.last_error) || '-') + '</span></td>'
         + '</tr>';
