@@ -267,6 +267,19 @@ def main() -> int:
     except Exception as exc:                           # noqa: BLE001
         check(False, "记账口径检查", str(exc))
 
+    print("== 7h. opencode 当聊天用（禁止跑工具）==")
+    try:
+        sup = open(os.path.join("app", "opencode_supervisor.py"), encoding="utf-8").read()
+        check('"edit": "deny"' in sup and '"bash": "deny"' in sup,
+              "配置里把工具权限设为 deny")
+        check('"tools"' in sup and '"bash": False' in sup,
+              "tools 显式关闭")
+        check("AGENTS.md" in sup, "写 AGENTS.md 约束模型")
+        gw = open(os.path.join("app", "gateway.py"), encoding="utf-8").read()
+        check("spawning process" in gw, "超时能识别「在跑工具」")
+    except Exception as exc:                           # noqa: BLE001
+        check(False, "opencode 聊天化检查", str(exc))
+
     print("== 8. 图标尺寸 ==")
     try:
         from PIL import Image
