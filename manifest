@@ -1,5 +1,5 @@
 appname=deepseek-gateway
-version=3.1.7
+version=3.1.8
 display_name=AI 网关
 desc=把多个模型服务商聚合成一个 OpenAI 兼容接口，跑在自己的飞牛 NAS 上。<br>支持 OpenAI Chat / Responses / Anthropic / Gemini 四种上游协议，失败自动切换下一家。<br>带用量统计（按天、按上游）、访问令牌、调用日志、出站品牌词脱敏、本地 opencode 托管。<br>免费额度可硬卡，用尽自动停用，绝不静默转付费。纯 Python 标准库，零第三方依赖，零 Docker。
 source=thirdparty
@@ -14,4 +14,4 @@ desktop_applaunchname=deepseek-gateway.main
 service_port=18787
 checkport=true
 ctl_stop=true
-changelog=3.1.7：修掉「日志模型对不上」的真正原因——走流式兜底的上游（opencode 这类不支持真流式的），记账时用的是该上游的默认模型，而不是客户端点名的模型，看起来就像网关偷偷换了模型。现在三条路径（非流式 / 真流式透传 / 兜底流式）统一按客户端点名记账，并都记录上游实际模型；响应体的 model 也统一回显客户端原名。新增结构检查防回归。3.1.6：日志区分对话与自检。3.1.5：拆分点名/上游两列。3.1.0：双向能力互通。3.0.0：整体重写。
+changelog=3.1.8：失败记录也按客户端点名记账（之前失败时仍用上游默认模型，看起来像换了模型）；日志里失败的请求直接把错误原因写在结果下面，不用悬停——像「opencode run 超时（150s）」这种一眼可见。3.1.7：兜底流式记账修正。3.1.6：日志区分对话与自检。3.1.5：拆分点名/上游两列。3.1.0：双向能力互通。3.0.0：整体重写。
