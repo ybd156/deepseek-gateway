@@ -707,6 +707,15 @@ function ocPaint(d) {
     (d.last_error ? ('[错误] ' + d.last_error + ' | ') : '') + (d.log || '（暂无日志）');
   document.getElementById('ocLogin').textContent = d.login_log || '（暂无）';
   document.getElementById('ocOwnLog').textContent = d.oc_logs || '（暂无）';
+  const lr = d.last_cli || {};
+  const lrEl = document.getElementById('ocLastRun');
+  if (lrEl) {
+    const parts = [];
+    if (lr.err) parts.push('[stderr]' + String.fromCharCode(10) + lr.err);
+    if (lr.out) parts.push('[stdout]' + String.fromCharCode(10) + lr.out);
+    lrEl.textContent = parts.length
+      ? parts.join(String.fromCharCode(10, 10)) : '（还没有运行过）';
+  }
 
   const gd = document.getElementById('ocGuide');
   if (gd && st.title && !cli) {
