@@ -1084,6 +1084,22 @@ def render_prompt(payload: dict) -> str:
     return chr(10).join(out)
 
 
+# opencode 每次请求都起一个进程；并发太多会互相抢资源，限一下
+_OC_SEM = threading.Semaphore(2)
+
+
+def _tail_text(path: str, limit: int = 400) -> str:
+    try:
+        with open(path, "rb") as fh:
+            fh.seek(0, os.SEEK_END)
+            size = fh.tell()
+            fh.seek(max(0, size - limit * 4))
+            data = fh.read()
+        return strip_ansi(data.decode("utf-8", "ignore")).strip()[-limit:]
+    except Exception:
+        return ""
+
+
 def call_opencode_cli(p: dict, payload: dict) -> tuple:
     bin_path, ws, env = SUPERVISOR.cli_context()
     if not bin_path:
@@ -1101,18 +1117,50 @@ def call_opencode_cli(p: dict, payload: dict) -> tuple:
         args += ["--agent", agent]
     args.append(prompt)
 
+    timeout = max(10, int(p["timeout"]))
     t0 = now()
-    try:
-        proc = subprocess.run(args, capture_output=True, timeout=p["timeout"],
-                              env=env, cwd=ws)
-    except subprocess.TimeoutExpired:
-        raise ProviderError(f"opencode run 超时（{p['timeout']}s）") from None
-    except Exception as exc:
-        raise ProviderError(f"启动 opencode run 失败：{exc}") from None
+    out_path = os.path.join(DATA_DIR, "oc-last-out.txt")
+    err_path = os.path.join(DATA_DIR, "oc-last-err.txt")
+    rc = -1
+    timed_out = False
 
-    out = strip_ansi(proc.stdout.decode("utf-8", "ignore")).strip()
-    err = strip_ansi(proc.stderr.decode("utf-8", "ignore")).strip()
+    got = _OC_SEM.acquire(timeout=min(30, timeout))
+    if not got:
+        raise ProviderError("opencode 并发已满（同时最多 2 个），稍后再试")
+    try:
+        with open(out_path, "wb") as fo, open(err_path, "wb") as fe:
+            try:
+                proc = subprocess.Popen(args, stdout=fo, stderr=fe, env=env,
+                                        cwd=ws, start_new_session=True)
+            except Exception as exc:                   # noqa: BLE001
+                raise ProviderError(f"启动 opencode run 失败：{exc}") from None
+            try:
+                rc = proc.wait(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                timed_out = True
+                try:
+                    os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+                except Exception:
+                    try:
+                        proc.kill()
+                    except Exception:
+                        pass
+                try:
+                    rc = proc.wait(timeout=5)
+                except Exception:
+                    rc = -9
+    finally:
+        _OC_SEM.release()
+
     ms = int((now() - t0) * 1000)
+    out = _tail_text(out_path, 20000)
+    err = _tail_text(err_path, 20000)
+
+    # 把「跑了什么、卡在哪」写进网关日志，下次超时不用猜
+    print(f"[opencode-cli] rc={rc} {ms}ms timeout={timed_out} "
+          f"model={model_arg} out={len(out)}B err={len(err)}B", flush=True)
+    if timed_out and (err or out):
+        print(f"[opencode-cli] 超时前输出：{(err or out)[-500:]}", flush=True)
 
     blob = (out + " " + err).lower()
     if "usage limit" in blob or "freeusage" in blob:
@@ -1120,8 +1168,15 @@ def call_opencode_cli(p: dict, payload: dict) -> tuple:
             "OpenCode 免费额度已用尽（服务端返回 FreeUsageLimitError）。"
             "免费模型有每日配额，用尽后需等重置或改用有 Key 的上游。")
 
-    if proc.returncode != 0:
-        raise ProviderError(f"opencode run 退出码 {proc.returncode}：{(err or out)[:300]}")
+    if timed_out:
+        tail = (err or out or "").strip()[-300:]
+        raise ProviderError(
+            f"opencode run 超时（{timeout}s）"
+            + (f"；超时前输出：{tail}" if tail else
+               "；它一句话都没输出，通常是卡在连不上 opencode.ai 或额度校验上"))
+
+    if rc != 0:
+        raise ProviderError(f"opencode run 退出码 {rc}：{(err or out)[:300]}")
     if not out:
         raise ProviderError("opencode run 没有输出")
 
@@ -2925,6 +2980,10 @@ def opencode_view() -> dict:
     cli_mode = bool(live_cli) or (bool(cli) and not any(
         (p.get("opencode_mode") or "server").lower() == "server" for p in oc))
 
+    st["last_cli"] = {
+        "out": _tail_text(os.path.join(DATA_DIR, "oc-last-out.txt"), 1200),
+        "err": _tail_text(os.path.join(DATA_DIR, "oc-last-err.txt"), 1200),
+    }
     st["cli_mode"] = cli_mode
     st["has_opencode_provider"] = bool(oc)
     st["needs_server"] = not cli_mode
