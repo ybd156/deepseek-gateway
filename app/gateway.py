@@ -1170,10 +1170,14 @@ def call_opencode_cli(p: dict, payload: dict) -> tuple:
 
     if timed_out:
         tail = (err or out or "").strip()[-300:]
-        raise ProviderError(
-            f"opencode run 超时（{timeout}s）"
-            + (f"；超时前输出：{tail}" if tail else
-               "；它一句话都没输出，通常是卡在连不上 opencode.ai 或额度校验上"))
+        if "spawning process" in (err + out):
+            hint = ("；它在反复执行 shell 命令（agent 行为），不是单纯聊天——"
+                    "把该上游的 timeout 调小，或确认工作目录是空的")
+        elif tail:
+            hint = f"；超时前输出：{tail}"
+        else:
+            hint = "；它一句话都没输出，通常是卡在连不上 opencode.ai 或额度校验上"
+        raise ProviderError(f"opencode run 超时（{timeout}s）" + hint)
 
     if rc != 0:
         raise ProviderError(f"opencode run 退出码 {rc}：{(err or out)[:300]}")
