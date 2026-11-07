@@ -710,6 +710,50 @@ def main() -> int:
         check("first_byte_ms" in probe_row, "自检也记了首字耗时",
               str(probe_row.get("first_byte_ms")))
 
+
+        print("== 34. 冷却中不等于「没有这个模型」==")
+        # 用一个只声明了某模型、但必然失败的上游，触发冷却
+        http("POST", base + "/admin/api/config", {
+            "strategy": "priority", "cooldown_seconds": 30,
+            "providers": [
+                {"name": "cd-prov", "enabled": True, "priority": 1,
+                 "base_url": "http://127.0.0.1:1/v1",
+                 "model": "cooldown-model", "api_key": "k"}]})
+        code1, _, _ = http("POST", base + "/v1/chat/completions",
+                           {"model": "cooldown-model",
+                            "messages": [{"role": "user", "content": "x"}]},
+                           headers={"Authorization": "Bearer " + key})
+        check(code1 == 502, "第一次真失败是 502", str(code1))
+        code2, _, txt2 = http("POST", base + "/v1/chat/completions",
+                              {"model": "cooldown-model",
+                               "messages": [{"role": "user", "content": "x"}]},
+                              headers={"Authorization": "Bearer " + key})
+        m2 = ""
+        try:
+            m2 = str(json.loads(txt2)["error"]["message"])
+        except Exception:
+            pass
+        check(code2 == 503, "冷却时给 503 而不是 400", str(code2))
+        check("冷却" in m2, "说明是冷却", m2[:80])
+        check("没有上游支持模型" not in m2, "不再误报「没有这个模型」", m2[:80])
+
+        print("== 35. 真没有的模型仍然是 400 ==")
+        code3, _, txt3 = http("POST", base + "/v1/chat/completions",
+                              {"model": "never-exists-model",
+                               "messages": [{"role": "user", "content": "x"}]},
+                              headers={"Authorization": "Bearer " + key})
+        check(code3 == 400, "返回 400", str(code3))
+        m3 = ""
+        try:
+            m3 = str(json.loads(txt3)["error"]["message"])
+        except Exception:
+            pass
+        check("没有上游支持模型" in m3, "明确说没这个模型", m3[:60])
+
+        http("POST", base + "/admin/api/config", {
+            "strategy": "priority", "cooldown_seconds": 5,
+            "providers": base_providers})
+
     finally:
         try:
             proc.terminate()
